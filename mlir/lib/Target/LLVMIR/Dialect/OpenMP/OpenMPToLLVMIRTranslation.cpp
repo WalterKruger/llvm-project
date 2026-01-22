@@ -3416,9 +3416,8 @@ convertOmpTaskloopContextOp(omp::TaskloopContextOp contextOp,
     // handled transparently by how these are passed to the structure passed
     // into the outlined function. When the task is duplicated, that structure
     // is duplicated too.
-    if (failed(cleanupPrivateVars(builder, moduleTranslation,
-                                  contextOp.getLoc(), privateVarsInfo.llvmVars,
-                                  privateVarsInfo.privatizers)))
+    if (failed(cleanupPrivateVars(contextOp, builder, moduleTranslation,
+                                  contextOp.getLoc(), privateVarsInfo)))
       return llvm::make_error<PreviouslyReportedError>();
     // Similarly, the task context structure freed inside the task is the
     // per-task copy after task duplication.
