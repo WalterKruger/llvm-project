@@ -9695,9 +9695,9 @@ emitTargetCall(OpenMPIRBuilder &OMPBuilder, IRBuilderBase &Builder,
                                          RTLoc, AllocIP, Dependencies,
                                          KArgs.RTArgs, Info.HasNoWait);
 
-      return OMPBuilder.emitKernelLaunch(
-          Builder, OutlinedFnID, EmitTargetCallFallbackCB, KArgs,
-          RuntimeAttrs.DeviceID, RTLoc, AllocIP);
+      return OMPBuilder.emitKernelLaunch(Builder, OutlinedFnID,
+                                         EmitTargetCallFallbackCB, KArgs,
+                                         RuntimeAttrs.DeviceID, RTLoc, AllocIP);
     }());
 
     Builder.restoreIP(AfterIP);
