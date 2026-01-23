@@ -3286,8 +3286,9 @@ convertOmpTaskloopContextOp(omp::TaskloopContextOp contextOp,
   TaskContextStructManager taskStructMgr{builder, moduleTranslation,
                                          privateVarsInfo.privatizers};
 
-  llvm::OpenMPIRBuilder::InsertPointTy allocaIP =
-      findAllocaInsertPoint(builder, moduleTranslation);
+  llvm::SmallVector<InsertPointTy> deallocIPs;
+  llvm::OpenMPIRBuilder::InsertPointTy allocIP =
+      findAllocInsertPoints(builder, moduleTranslation, &deallocIPs);
 
   assert(builder.GetInsertPoint() == builder.GetInsertBlock()->end());
   llvm::BasicBlock *taskloopStartBlock = llvm::BasicBlock::Create(
@@ -3302,8 +3303,8 @@ convertOmpTaskloopContextOp(omp::TaskloopContextOp contextOp,
   llvm::BasicBlock *initBlock =
       splitBB(builder, /*CreateBranch=*/true, "omp.private.init");
 
-  LLVM::ModuleTranslation::SaveStack<OpenMPAllocaStackFrame> frame(
-      moduleTranslation, allocaIP);
+  LLVM::ModuleTranslation::SaveStack<OpenMPAllocStackFrame> frame(
+      moduleTranslation, allocIP, deallocIPs);
 
   // Allocate and initialize private variables
   builder.SetInsertPoint(initBlock->getTerminator());
@@ -3365,12 +3366,12 @@ convertOmpTaskloopContextOp(omp::TaskloopContextOp contextOp,
           loopOp, builder, moduleTranslation, lbVal, ubVal, stepVal))
     return handleError(std::move(err), opInst);
 
-  auto bodyCB = [&](InsertPointTy allocaIP,
-                    InsertPointTy codegenIP) -> llvm::Error {
+  auto bodyCB = [&](InsertPointTy allocIP, InsertPointTy codegenIP,
+                    llvm::ArrayRef<InsertPointTy> deallocIPs) -> llvm::Error {
     // Save the alloca insertion point on ModuleTranslation stack for use in
     // nested regions.
-    LLVM::ModuleTranslation::SaveStack<OpenMPAllocaStackFrame> frame(
-        moduleTranslation, allocaIP);
+    LLVM::ModuleTranslation::SaveStack<OpenMPAllocStackFrame> frame(
+        moduleTranslation, allocIP, deallocIPs);
 
     // translate the body of the taskloop:
     builder.restoreIP(codegenIP);
@@ -3388,7 +3389,7 @@ convertOmpTaskloopContextOp(omp::TaskloopContextOp contextOp,
       llvm::IRBuilderBase::InsertPointGuard guard(builder);
       llvm::Type *llvmAllocType =
           moduleTranslation.convertType(privDecl.getType());
-      builder.SetInsertPoint(allocaIP.getBlock()->getTerminator());
+      builder.SetInsertPoint(allocIP.getBlock()->getTerminator());
       llvm::Value *llvmPrivateVar = builder.CreateAlloca(
           llvmAllocType, /*ArraySize=*/nullptr, "omp.private.alloc");
 
@@ -3567,7 +3568,7 @@ convertOmpTaskloopContextOp(omp::TaskloopContextOp contextOp,
   llvm::OpenMPIRBuilder::LocationDescription ompLoc(builder);
   llvm::OpenMPIRBuilder::InsertPointOrErrorTy afterIP =
       moduleTranslation.getOpenMPBuilder()->createTaskloop(
-          ompLoc, allocaIP, bodyCB, loopInfo, lbVal, ubVal, stepVal,
+          ompLoc, allocIP, deallocIPs, bodyCB, loopInfo, lbVal, ubVal, stepVal,
           contextOp.getUntied(), ifCond, grainsize, contextOp.getNogroup(),
           sched, moduleTranslation.lookupValue(contextOp.getFinal()),
           contextOp.getMergeable(),
