@@ -7761,7 +7761,8 @@ TEST_F(OpenMPIRBuilderTest, CreateTaskAffinity) {
   F->setName("func");
   IRBuilder<> Builder(BB);
 
-  auto BodyGenCB = [&](InsertPointTy AllocaIP, InsertPointTy CodeGenIP) {
+  auto BodyGenCB = [&](InsertPointTy AllocaIP, InsertPointTy CodeGenIP,
+                       ArrayRef<BasicBlock *> DeallocBlocks) {
     return Error::success();
   };
 
@@ -7795,7 +7796,7 @@ TEST_F(OpenMPIRBuilderTest, CreateTaskAffinity) {
       OpenMPIRBuilder::InsertPointTy, AfterIP,
       OMPBuilder.createTask(
           Loc, InsertPointTy(AllocaBB, AllocaBB->getFirstInsertionPt()),
-          BodyGenCB,
+          /*DeallocBlocks=*/{}, BodyGenCB,
           /*Tied=*/true,
           /*Final=*/nullptr,
           /*IfCondition=*/nullptr,
