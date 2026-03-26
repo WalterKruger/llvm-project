@@ -16001,8 +16001,10 @@ BoUpSLP::getEntryCost(const TreeEntry *E, ArrayRef<Value *> VectorizedVals,
                                      : CmpInst::BAD_ICMP_PREDICATE;
       Value *LHS = nullptr, *RHS = nullptr;
       auto MatchCmp = m_Cmp(CurrentPred, m_Value(), m_Value());
-      bool IsSelect = ShuffleOrOp == Instruction::Select &&
-                      match(VI, m_Select(MatchCmp, m_Value(LHS), m_Value(RHS)));
+      bool IsSelect =
+          ShuffleOrOp == Instruction::Select &&
+          (match(VI, m_Select(MatchCmp, m_Value(LHS), m_Value(RHS))) ||
+           match(VI, m_Select(m_Value(), m_Value(LHS), m_Value(RHS))));
       if ((!IsSelect && !match(VI, MatchCmp)) ||
           (CurrentPred != static_cast<CmpInst::Predicate>(VecPred) &&
            CurrentPred != static_cast<CmpInst::Predicate>(SwappedVecPred)))
@@ -16030,8 +16032,12 @@ BoUpSLP::getEntryCost(const TreeEntry *E, ArrayRef<Value *> VectorizedVals,
       if (!ScalarCost.isValid()) {
         ScalarCost = TTI->getCmpSelInstrCost(
             E->getOpcode(), OrigScalarTy, Builder.getInt1Ty(), CurrentPred,
-            CostKind, getOperandInfo(VI->getOperand(0)),
-            getOperandInfo(VI->getOperand(1)), VI);
+            CostKind,
+            getOperandInfo(
+                VI->getOperand(ShuffleOrOp == Instruction::Select ? 1 : 0)),
+            getOperandInfo(
+                VI->getOperand(ShuffleOrOp == Instruction::Select ? 2 : 1)),
+            VI);
       }
       InstructionCost IntrinsicCost = GetMinMaxCost(OrigScalarTy, VI);
       if (IntrinsicCost.isValid())
@@ -16066,10 +16072,13 @@ BoUpSLP::getEntryCost(const TreeEntry *E, ArrayRef<Value *> VectorizedVals,
         }
       }
       if (!VecCost.isValid()) {
-        VecCost =
-            TTI->getCmpSelInstrCost(E->getOpcode(), VecTy, MaskTy, VecPred,
-                                    CostKind, getOperandInfo(E->getOperand(0)),
-                                    getOperandInfo(E->getOperand(1)), VL0);
+        VecCost = TTI->getCmpSelInstrCost(
+            E->getOpcode(), VecTy, MaskTy, VecPred, CostKind,
+            getOperandInfo(
+                E->getOperand(ShuffleOrOp == Instruction::Select ? 1 : 0)),
+            getOperandInfo(
+                E->getOperand(ShuffleOrOp == Instruction::Select ? 2 : 1)),
+            VL0);
         if (auto *SI = dyn_cast<SelectInst>(VL0)) {
           auto *CondType =
               getWidenedType(SI->getCondition()->getType(), VL.size());
@@ -26397,8 +26406,8 @@ public:
             (R.isAnalyzedReductionRoot(EdgeInst) &&
              all_of(EdgeInst->operands(), IsaPred<Constant>))) {
           PossibleReducedVals.push_back(EdgeVal);
-          if (auto *I = dyn_cast<Instruction>(EdgeVal); I && !isCmpSelMinMax(I))
-            Operands.insert_range(I->operands());
+          if (EdgeInst && !isCmpSelMinMax(EdgeInst))
+            Operands.insert_range(EdgeInst->operands());
           continue;
         }
         if (CurrentRK == ReductionOrdering::Ordered)
