@@ -11875,11 +11875,14 @@ public:
           isCommutative(MainOp) && MainOp->getNumOperands() == 2;
       Operands.assign(MainOp->getNumOperands(),
                       BoUpSLP::ValueList(VL.size(), nullptr));
-      // Build operands and simultaneously gather voting data for
-      // commutative operand normalization.
-      int RefLane = -1;
-      unsigned RefID0 = 0, RefID1 = 0;
-      int Vote = 0;
+      // Build operands and simultaneously count (ID0, ID1) pair
+      // frequencies for commutative operand normalization. Pairs and
+      // their inverses are tracked under a canonical key so that
+      // (Load, Add) and (Add, Load) contribute to the same bucket.
+      SmallMapVector<size_t, std::tuple<unsigned, unsigned, unsigned, unsigned>,
+                     8>
+          PairCounts;
+      unsigned MajID0 = 0, MajID1 = 0;
       for (auto [Idx, V] : enumerate(VL)) {
         SmallVector<Value *> OperandsForValue = getOperands(S, V);
         for (auto [OperandIdx, Operand] : enumerate(OperandsForValue))
@@ -11888,49 +11891,68 @@ public:
           continue;
         unsigned ID0 = OperandsForValue[0]->getValueID();
         unsigned ID1 = OperandsForValue[1]->getValueID();
-        if (RefLane < 0) {
-          RefLane = Idx;
-          RefID0 = ID0;
-          RefID1 = ID1;
-          ++Vote;
-        } else if (ID0 == RefID0) {
-          ++Vote;
-        } else if (ID0 == RefID1) {
-          --Vote;
+        if (ID0 == ID1)
+          continue;
+        unsigned MinID = std::min(ID0, ID1);
+        unsigned MaxID = std::max(ID0, ID1);
+        uint64_t Key = hash_combine(hash_value(MinID), hash_value(MaxID));
+        auto &Counts = PairCounts.try_emplace(Key).first->second;
+        if (ID0 < ID1)
+          ++std::get<0>(Counts);
+        else
+          ++std::get<1>(Counts);
+        std::get<2>(Counts) = MinID;
+        std::get<3>(Counts) = MaxID;
+      }
+      // Find the most frequent (ID0, ID1) pair across non-copyable
+      // lanes. Select the orientation (original or inverse) that has
+      // more votes as the majority pattern.
+      unsigned BestCount = 0;
+      bool HasMajority = false;
+      for (auto &[Key, Counts] : PairCounts) {
+        unsigned Total = std::get<0>(Counts) + std::get<1>(Counts);
+        if (Total > BestCount) {
+          BestCount = Total;
+          if (std::get<0>(Counts) >= std::get<1>(Counts)) {
+            MajID0 = std::get<2>(Counts);
+            MajID1 = std::get<3>(Counts);
+          } else {
+            MajID0 = std::get<3>(Counts);
+            MajID1 = std::get<2>(Counts);
+          }
+          HasMajority = std::get<0>(Counts) != std::get<1>(Counts) || Total > 1;
         }
       }
       // For commutative ops, normalize non-copyable lanes in two steps:
       // 1) Swap lanes whose operand types are the exact inverse of the
       //    majority pattern, making the non-copyable lanes consistent.
-      // 2) If the consistent pattern has loads at OpIdx 1 (strict
-      //    majority), swap those lanes to put loads at OpIdx 0 for
-      //    better downstream vectorization (vector load + copyable).
-      if (RefLane >= 0 && RefID0 != RefID1 && Vote != 0) {
-        unsigned MajID0 = Vote > 0 ? RefID0 : RefID1;
-        unsigned MajID1 = Vote > 0 ? RefID1 : RefID0;
-        // Step 1: swap exact-inverse lanes. Count loads for step 2.
-        unsigned LAt0 = 0, LAt1 = 0, TotalNC = 0;
-        for (auto [Idx, V] : enumerate(VL)) {
-          if (S.isCopyableElement(V) || isa<PoisonValue>(V))
-            continue;
+      // 2) Independently, if a strict majority of non-copyable lanes
+      //    have loads at OpIdx 1, swap those lanes to put loads at
+      //    OpIdx 0 for better downstream vectorization.
+      unsigned LAt0 = 0, LAt1 = 0, TotalNC = 0;
+      for (auto [Idx, V] : enumerate(VL)) {
+        if (S.isCopyableElement(V) || isa<PoisonValue>(V))
+          continue;
+        // Step 1: swap exact-inverse lanes.
+        if (HasMajority) {
           unsigned ID0 = Operands[0][Idx]->getValueID();
           unsigned ID1 = Operands[1][Idx]->getValueID();
           if (ID0 == MajID1 && ID1 == MajID0)
             std::swap(Operands[0][Idx], Operands[1][Idx]);
-          ++TotalNC;
-          LAt0 += isa<LoadInst>(Operands[0][Idx]);
-          LAt1 += isa<LoadInst>(Operands[1][Idx]);
         }
-        // Step 2: if most non-copyable lanes have loads at OpIdx 1,
-        // swap those lanes to put loads at OpIdx 0.
-        if (TotalNC > 1 && LAt1 > LAt0 && LAt1 * 2 > TotalNC) {
-          for (auto [Idx, V] : enumerate(VL)) {
-            if (S.isCopyableElement(V) || isa<PoisonValue>(V))
-              continue;
-            if (!isa<LoadInst>(Operands[0][Idx]) &&
-                isa<LoadInst>(Operands[1][Idx]))
-              std::swap(Operands[0][Idx], Operands[1][Idx]);
-          }
+        ++TotalNC;
+        LAt0 += isa<LoadInst>(Operands[0][Idx]);
+        LAt1 += isa<LoadInst>(Operands[1][Idx]);
+      }
+      // Step 2: if most non-copyable lanes have loads at OpIdx 1,
+      // swap those lanes to put loads at OpIdx 0.
+      if (TotalNC > 1 && LAt1 > LAt0 && LAt1 * 2 > TotalNC) {
+        for (auto [Idx, V] : enumerate(VL)) {
+          if (S.isCopyableElement(V) || isa<PoisonValue>(V))
+            continue;
+          if (!isa<LoadInst>(Operands[0][Idx]) &&
+              isa<LoadInst>(Operands[1][Idx]))
+            std::swap(Operands[0][Idx], Operands[1][Idx]);
         }
       }
     } else {
