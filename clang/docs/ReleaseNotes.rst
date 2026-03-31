@@ -252,6 +252,15 @@ Attribute Changes in Clang
   sound because any writer must hold all capabilities, so holding any one
   prevents concurrent writes.
 
+- The ``[[clang::unsafe_buffer_usage]]`` attribute is now supported in API
+  notes. For example:
+
+  .. code-block:: yaml
+
+    Functions:
+      - Name: myUnsafeFunction
+        UnsafeBufferUsage: true
+
 Improvements to Clang's diagnostics
 -----------------------------------
 - ``-Wunused-but-set-variable`` now diagnoses file-scope variables with

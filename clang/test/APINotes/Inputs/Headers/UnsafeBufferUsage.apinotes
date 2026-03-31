@@ -1,0 +1,6 @@
+---
+Name: UnsafeBufferUsage
+Functions:
+  - Name: unsafeFunc
+    UnsafeBufferUsage: true
+...
