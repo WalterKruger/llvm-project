@@ -544,8 +544,9 @@ private:
   void manglePrefix(NestedNameSpecifier Qualifier);
   void manglePrefix(const DeclContext *DC, bool NoFunction=false);
   void manglePrefix(QualType type);
+  void mangleNameWithPrefix(GlobalDecl GD, NestedNameSpecifier Qualifier);
   void mangleTemplatePrefix(GlobalDecl GD, bool NoFunction=false);
-  void mangleTemplatePrefix(TemplateName Template);
+  [[nodiscard]] bool mangleTemplatePrefix(TemplateName Template, bool InPrefix);
   const NamedDecl *getClosurePrefix(const Decl *ND);
   void mangleClosurePrefix(const NamedDecl *ND, bool NoFunction = false);
   bool mangleUnresolvedTypeOrSimpleId(QualType DestroyedType,
@@ -559,7 +560,6 @@ private:
 
   // Declare manglers for every type class.
 #define ABSTRACT_TYPE(CLASS, PARENT)
-#define NON_CANONICAL_TYPE(CLASS, PARENT)
 #define TYPE(CLASS, PARENT) void mangleType(const CLASS##Type *T);
 #include "clang/AST/TypeNodes.inc"
 
@@ -1206,7 +1206,7 @@ void CXXNameMangler::mangleUnscopedTemplateName(
     assert(!AdditionalAbiTags &&
            "template template param cannot have abi tags");
     mangleTemplateParameter(TTP->getDepth(), TTP->getIndex());
-  } else if (isa<BuiltinTemplateDecl>(ND) || isa<ConceptDecl>(ND)) {
+  } else if (isa<BuiltinTemplateDecl, ConceptDecl, TypeAliasTemplateDecl>(ND)) {
     mangleUnscopedName(GD, DC, AdditionalAbiTags);
   } else {
     mangleUnscopedName(GD.getWithDecl(ND->getTemplatedDecl()), DC,
@@ -1320,7 +1320,7 @@ void CXXNameMangler::mangleCallOffset(int64_t NonVirtual, int64_t Virtual) {
 void CXXNameMangler::manglePrefix(QualType type) {
   if (const auto *TST = type->getAs<TemplateSpecializationType>()) {
     if (!mangleSubstitution(QualType(TST, 0))) {
-      mangleTemplatePrefix(TST->getTemplateName());
+      (void)mangleTemplatePrefix(TST->getTemplateName(), /*InPrefix=*/true);
 
       // FIXME: GCC does not appear to mangle the template arguments when
       // the template in question is a dependent template name. Should we
@@ -2259,39 +2259,102 @@ void CXXNameMangler::manglePrefix(const DeclContext *DC, bool NoFunction) {
   addSubstitution(ND);
 }
 
-void CXXNameMangler::mangleTemplatePrefix(TemplateName Template) {
+bool CXXNameMangler::mangleTemplatePrefix(TemplateName Template,
+                                          bool InPrefix) {
   // <template-prefix> ::= <prefix> <template unqualified-name>
   //                   ::= <template-param>
   //                   ::= <substitution>
-  if (TemplateDecl *TD = Template.getAsTemplateDecl())
-    return mangleTemplatePrefix(TD);
+  switch (Template.getKind()) {
+  case clang::TemplateName::Template:
+  case clang::TemplateName::UsingTemplate: {
+    const TemplateDecl *TD = Template.getAsTemplateDecl();
+    const DeclContext *DC = Context.getEffectiveDeclContext(TD);
 
-  DependentTemplateName *Dependent = Template.getAsDependentTemplateName();
-  assert(Dependent && "unexpected template name kind");
+    if (DC->isTranslationUnit() || isStdNamespace(DC)) {
+      mangleUnscopedTemplateName(TD, DC, nullptr);
+      return false;
+    }
+    if (!InPrefix)
+      Out << 'N';
+    mangleTemplatePrefix(TD);
+    return true;
+  }
+  case clang::TemplateName::QualifiedTemplate: {
+    const QualifiedTemplateName *S = Template.getAsQualifiedTemplateName();
 
-  // Clang 11 and before mangled the substitution for a dependent template name
-  // after already having emitted (a substitution for) the prefix.
-  bool Clang11Compat = isCompatibleWith(LangOptions::ClangABI::Ver11);
-  if (!Clang11Compat && mangleSubstitution(Template))
-    return;
+    if (!InPrefix)
+      Out << 'N';
+    manglePrefix(S->getQualifier());
 
-  manglePrefix(Dependent->getQualifier());
+    TemplateName Underlying = S->getUnderlyingTemplate();
+    const NamedDecl *ND;
+    switch (Underlying.getKind()) {
+    case TemplateName::Template:
+      ND = Underlying.getAsTemplateDecl();
+      break;
+    case TemplateName::UsingTemplate:
+      ND = Underlying.getAsUsingShadowDecl();
+      break;
+    default:
+      llvm_unreachable(
+          "unexpected underlying template name kind for qualified template");
+    }
+    mangleTemplatePrefix(ND);
+    return true;
+    break;
+  }
+  case clang::TemplateName::DependentTemplate: {
+    DependentTemplateName *Dependent = Template.getAsDependentTemplateName();
+    assert(Dependent && "unexpected template name kind");
 
-  if (Clang11Compat && mangleSubstitution(Template))
-    return;
+    if (!InPrefix)
+      Out << 'N';
 
-  if (IdentifierOrOverloadedOperator Name = Dependent->getName();
-      const IdentifierInfo *Id = Name.getIdentifier())
-    mangleSourceName(Id);
-  else
-    mangleOperatorName(Name.getOperator(), UnknownArity);
+    // Clang 11 and before mangled the substitution for a dependent template
+    // name after already having emitted (a substitution for) the prefix.
+    bool Clang11Compat = isCompatibleWith(LangOptions::ClangABI::Ver11);
+    if (!Clang11Compat && mangleSubstitution(Template))
+      return true;
 
-  addSubstitution(Template);
+    manglePrefix(Dependent->getQualifier());
+
+    if (Clang11Compat && mangleSubstitution(Template))
+      return true;
+
+    if (IdentifierOrOverloadedOperator Name = Dependent->getName();
+        const IdentifierInfo *Id = Name.getIdentifier())
+      mangleSourceName(Id);
+    else
+      mangleOperatorName(Name.getOperator(), UnknownArity);
+
+    addSubstitution(Template);
+    return true;
+  }
+  case clang::TemplateName::SubstTemplateTemplateParm:
+  case clang::TemplateName::AssumedTemplate:
+  case clang::TemplateName::DeducedTemplate:
+  case clang::TemplateName::SubstTemplateTemplateParmPack:
+  case clang::TemplateName::OverloadedTemplate:
+    llvm_unreachable("these shouldn't survive to mangling");
+    break;
+  }
+  llvm_unreachable("unhandled template name kind");
+}
+
+void CXXNameMangler::mangleNameWithPrefix(GlobalDecl GD,
+                                          NestedNameSpecifier Qualifier) {
+  if (Qualifier) {
+    Out << 'N';
+    manglePrefix(Qualifier);
+  }
+  mangleName(GD);
+  if (Qualifier)
+    Out << 'E';
 }
 
 void CXXNameMangler::mangleTemplatePrefix(GlobalDecl GD,
                                           bool NoFunction) {
-  const TemplateDecl *ND = cast<TemplateDecl>(GD.getDecl());
+  const NamedDecl *ND = cast<NamedDecl>(GD.getDecl());
   // <template-prefix> ::= <prefix> <template unqualified-name>
   //                   ::= <template-param>
   //                   ::= <substitution>
@@ -2309,9 +2372,12 @@ void CXXNameMangler::mangleTemplatePrefix(GlobalDecl GD,
     manglePrefix(DC, NoFunction);
     if (isa<BuiltinTemplateDecl>(ND) || isa<ConceptDecl>(ND))
       mangleUnqualifiedName(GD, DC, nullptr);
-    else
-      mangleUnqualifiedName(GD.getWithDecl(ND->getTemplatedDecl()), DC,
-                            nullptr);
+    else {
+      const auto *SD = dyn_cast<UsingShadowDecl>(ND);
+      const NamedDecl *TD =
+          SD ? SD->getTargetDecl() : cast<TemplateDecl>(ND)->getTemplatedDecl();
+      mangleUnqualifiedName(GD.getWithDecl(TD), DC, nullptr);
+    }
   }
 
   addSubstitution(ND);
@@ -3008,53 +3074,13 @@ void CXXNameMangler::mangleType(QualType T) {
   // augmented via semantic analysis (i.e., with implicit conversions and
   // default template arguments) for any instantiation-dependent type.
   // Unfortunately, that requires several changes to our AST:
-  //   - Instantiation-dependent TemplateSpecializationTypes will need to be
-  //     uniqued, so that we can handle substitutions properly
   //   - Default template arguments will need to be represented in the
   //     TemplateSpecializationType, since they need to be mangled even though
   //     they aren't written.
   //   - Conversions on non-type template arguments need to be expressed, since
   //     they can affect the mangling of sizeof/alignof.
-  //
-  // FIXME: This is wrong when mapping to the canonical type for a dependent
-  // type discards instantiation-dependent portions of the type, such as for:
-  //
-  //   template<typename T, int N> void f(T (&)[sizeof(N)]);
-  //   template<typename T> void f(T() throw(typename T::type)); (pre-C++17)
-  //
-  // It's also wrong in the opposite direction when instantiation-dependent,
-  // canonically-equivalent types differ in some irrelevant portion of inner
-  // type sugar. In such cases, we fail to form correct substitutions, eg:
-  //
-  //   template<int N> void f(A<sizeof(N)> *, A<sizeof(N)> (*));
-  //
-  // We should instead canonicalize the non-instantiation-dependent parts,
-  // regardless of whether the type as a whole is dependent or instantiation
-  // dependent.
-  if (!T->isInstantiationDependentType() || T->isDependentType())
-    T = T.getCanonicalType();
-  else {
-    // Desugar any types that are purely sugar.
-    do {
-      // Don't desugar through template specialization types that aren't
-      // type aliases. We need to mangle the template arguments as written.
-      if (const TemplateSpecializationType *TST
-                                      = dyn_cast<TemplateSpecializationType>(T))
-        if (!TST->isTypeAlias())
-          break;
-
-      // FIXME: We presumably shouldn't strip off ElaboratedTypes with
-      // instantation-dependent qualifiers. See
-      // https://github.com/itanium-cxx-abi/cxx-abi/issues/114.
-
-      QualType Desugared
-        = T.getSingleStepDesugaredType(Context.getASTContext());
-      if (Desugared == T)
-        break;
-
-      T = Desugared;
-    } while (true);
-  }
+  T = Context.getASTContext().getCanonicalType(
+      T, CanonicalizationKind::Functional);
   auto [ty, quals] = T.split();
 
   bool isSubstitutable =
@@ -3088,10 +3114,6 @@ void CXXNameMangler::mangleType(QualType T) {
   } else {
     switch (ty->getTypeClass()) {
 #define ABSTRACT_TYPE(CLASS, PARENT)
-#define NON_CANONICAL_TYPE(CLASS, PARENT) \
-    case Type::CLASS: \
-      llvm_unreachable("can't mangle non-canonical type " #CLASS "Type"); \
-      return;
 #define TYPE(CLASS, PARENT) \
     case Type::CLASS: \
       mangleType(static_cast<const CLASS##Type*>(ty)); \
@@ -3799,8 +3821,8 @@ void CXXNameMangler::mangleBareFunctionType(const FunctionProtoType *Proto,
       }
 
       // Mangle the type.
-      QualType ParamTy = Proto->getParamType(I);
-      mangleType(Context.getASTContext().getSignatureParameterType(ParamTy));
+      mangleType(Context.getASTContext().getCanonicalParamType(
+          Proto->getParamType(I), CanonicalizationKind::Functional));
 
       if (FD) {
         if (auto *Attr = FD->getParamDecl(I)->getAttr<PassObjectSizeAttr>()) {
@@ -3828,10 +3850,8 @@ void CXXNameMangler::mangleBareFunctionType(const FunctionProtoType *Proto,
   FunctionTypeDepth.pop(saved);
 }
 
-// <type>            ::= <class-enum-type>
-// <class-enum-type> ::= <name>
 void CXXNameMangler::mangleType(const UnresolvedUsingType *T) {
-  mangleName(T->getDecl());
+  llvm_unreachable("UnresolvedUsingType shouldn't survive to mangling");
 }
 
 // <type>            ::= <class-enum-type>
@@ -3843,7 +3863,7 @@ void CXXNameMangler::mangleType(const RecordType *T) {
   mangleType(static_cast<const TagType*>(T));
 }
 void CXXNameMangler::mangleType(const TagType *T) {
-  mangleName(T->getDecl()->getDefinitionOrSelf());
+  mangleNameWithPrefix(T->getDecl(), T->getQualifier());
 }
 
 // <type>       ::= <array-type>
@@ -4480,18 +4500,15 @@ void CXXNameMangler::mangleType(const InjectedClassNameType *T) {
 }
 
 void CXXNameMangler::mangleType(const TemplateSpecializationType *T) {
-  if (TemplateDecl *TD = T->getTemplateName().getAsTemplateDecl()) {
-    mangleTemplateName(TD, T->template_arguments());
-  } else {
-    Out << 'N';
-    mangleTemplatePrefix(T->getTemplateName());
+  TemplateName Template = T->getTemplateName();
+  bool Nested = mangleTemplatePrefix(Template, /*InPrefix=*/false);
 
-    // FIXME: GCC does not appear to mangle the template arguments when
-    // the template in question is a dependent template name. Should we
-    // emulate that badness?
-    mangleTemplateArgs(T->getTemplateName(), T->template_arguments());
+  // FIXME: GCC does not appear to mangle the template arguments when
+  // the template in question is a dependent template name. Should we
+  // emulate that badness?
+  mangleTemplateArgs(Template, T->template_arguments());
+  if (Nested)
     Out << 'E';
-  }
 }
 
 void CXXNameMangler::mangleType(const DependentNameType *T) {
@@ -4656,6 +4673,45 @@ void CXXNameMangler::mangleType(const DependentBitIntType *T) {
 
 void CXXNameMangler::mangleType(const ArrayParameterType *T) {
   mangleType(cast<ConstantArrayType>(T));
+}
+
+void CXXNameMangler::mangleType(const TypedefType *T) {
+  mangleNameWithPrefix(T->getDecl(), T->getQualifier());
+}
+
+void CXXNameMangler::mangleType(const UsingType *T) {
+  mangleNameWithPrefix(T->getDecl(), T->getQualifier());
+}
+
+void CXXNameMangler::mangleType(const DecayedType *T) {
+  llvm_unreachable("can't mangle non-canonical type");
+}
+void CXXNameMangler::mangleType(const AdjustedType *T) {
+  llvm_unreachable("can't mangle non-canonical type");
+}
+void CXXNameMangler::mangleType(const AttributedType *T) {
+  llvm_unreachable("can't mangle non-canonical type");
+}
+void CXXNameMangler::mangleType(const ObjCTypeParamType *T) {
+  llvm_unreachable("can't mangle non-canonical type");
+}
+void CXXNameMangler::mangleType(const MacroQualifiedType *T) {
+  llvm_unreachable("can't mangle non-canonical type");
+}
+void CXXNameMangler::mangleType(const CountAttributedType *T) {
+  llvm_unreachable("can't mangle non-canonical type");
+}
+void CXXNameMangler::mangleType(const PredefinedSugarType *T) {
+  llvm_unreachable("can't mangle non-canonical type");
+}
+void CXXNameMangler::mangleType(const BTFTagAttributedType *T) {
+  llvm_unreachable("can't mangle non-canonical type");
+}
+void CXXNameMangler::mangleType(const SubstTemplateTypeParmType *T) {
+  llvm_unreachable("can't mangle non-canonical type");
+}
+void CXXNameMangler::mangleType(const ParenType *T) {
+  llvm_unreachable("can't mangle non-canonical type");
 }
 
 void CXXNameMangler::mangleType(const HLSLAttributedResourceType *T) {
@@ -7040,8 +7096,9 @@ static bool hasMangledSubstitutionQualifiers(QualType T) {
 
 bool CXXNameMangler::mangleSubstitution(QualType T) {
   if (!hasMangledSubstitutionQualifiers(T)) {
-    if (const auto *RD = T->getAsCXXRecordDecl())
-      return mangleSubstitution(RD);
+    if (const auto *TT = dyn_cast<TagType>(T);
+        isa_and_nonnull<RecordType, InjectedClassNameType>(TT))
+      return mangleSubstitution(TT->getDecl());
   }
 
   uintptr_t TypePtr = reinterpret_cast<uintptr_t>(T.getAsOpaquePtr());
@@ -7210,8 +7267,9 @@ bool CXXNameMangler::mangleStandardSubstitution(const NamedDecl *ND) {
 
 void CXXNameMangler::addSubstitution(QualType T) {
   if (!hasMangledSubstitutionQualifiers(T)) {
-    if (const auto *RD = T->getAsCXXRecordDecl()) {
-      addSubstitution(RD);
+    if (const auto *TT = dyn_cast<TagType>(T);
+        isa_and_nonnull<RecordType, InjectedClassNameType>(TT)) {
+      addSubstitution(TT->getDecl());
       return;
     }
   }
