@@ -16,9 +16,8 @@ define i32 @test(ptr nocapture %G) {
 ; CHECK-NEXT:  entry:
 ; CHECK-NEXT:    [[ARRAYIDX:%.*]] = getelementptr inbounds double, ptr [[G:%.*]], i64 5
 ; CHECK-NEXT:    [[TMP0:%.*]] = load <2 x double>, ptr [[ARRAYIDX]], align 8
-; CHECK-NEXT:    [[TMP1:%.*]] = shufflevector <2 x double> [[TMP0]], <2 x double> poison, <3 x i32> <i32 0, i32 1, i32 1>
-; CHECK-NEXT:    [[TMP4:%.*]] = fmul <3 x double> [[TMP1]], <double 4.000000e+00, double 3.000000e+00, double 4.000000e+00>
-; CHECK-NEXT:    [[TMP2:%.*]] = shufflevector <3 x double> [[TMP4]], <3 x double> poison, <4 x i32> <i32 0, i32 1, i32 0, i32 2>
+; CHECK-NEXT:    [[TMP1:%.*]] = shufflevector <2 x double> [[TMP0]], <2 x double> poison, <4 x i32> <i32 0, i32 1, i32 0, i32 1>
+; CHECK-NEXT:    [[TMP2:%.*]] = fmul <4 x double> [[TMP1]], <double 4.000000e+00, double 3.000000e+00, double 4.000000e+00, double 4.000000e+00>
 ; CHECK-NEXT:    [[TMP3:%.*]] = fadd <4 x double> [[TMP2]], <double 1.000000e+00, double 6.000000e+00, double 7.000000e+00, double 8.000000e+00>
 ; CHECK-NEXT:    store <4 x double> [[TMP3]], ptr [[G]], align 8
 ; CHECK-NEXT:    ret i32 undef

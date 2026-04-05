@@ -251,10 +251,10 @@ define void @select_uniform_ugt_16xi8(ptr %ptr, i8 %x) {
 ; CHECK-NEXT:    [[TMP3:%.*]] = load <7 x i8>, ptr [[GEP_9]], align 1
 ; CHECK-NEXT:    [[TMP2:%.*]] = shufflevector <7 x i8> [[TMP3]], <7 x i8> poison, <8 x i32> <i32 0, i32 1, i32 2, i32 3, i32 4, i32 5, i32 6, i32 poison>
 ; CHECK-NEXT:    [[TMP7:%.*]] = shufflevector <8 x i8> [[TMP0]], <8 x i8> [[TMP2]], <15 x i32> <i32 0, i32 1, i32 2, i32 3, i32 4, i32 5, i32 6, i32 7, i32 8, i32 9, i32 10, i32 11, i32 12, i32 13, i32 14>
-; CHECK-NEXT:    [[TMP8:%.*]] = icmp ugt <15 x i8> [[TMP7]], splat (i8 -1)
-; CHECK-NEXT:    [[TMP9:%.*]] = insertelement <15 x i8> poison, i8 [[X]], i32 0
-; CHECK-NEXT:    [[TMP10:%.*]] = shufflevector <15 x i8> [[TMP9]], <15 x i8> poison, <15 x i32> zeroinitializer
-; CHECK-NEXT:    [[TMP11:%.*]] = select <15 x i1> [[TMP8]], <15 x i8> [[TMP7]], <15 x i8> [[TMP10]]
+; CHECK-NEXT:    [[TMP4:%.*]] = icmp ugt <15 x i8> [[TMP7]], splat (i8 -1)
+; CHECK-NEXT:    [[TMP5:%.*]] = insertelement <15 x i8> poison, i8 [[X]], i32 0
+; CHECK-NEXT:    [[TMP6:%.*]] = shufflevector <15 x i8> [[TMP5]], <15 x i8> poison, <15 x i32> zeroinitializer
+; CHECK-NEXT:    [[TMP11:%.*]] = select <15 x i1> [[TMP4]], <15 x i8> [[TMP7]], <15 x i8> [[TMP6]]
 ; CHECK-NEXT:    [[TMP14:%.*]] = shufflevector <15 x i8> [[TMP11]], <15 x i8> poison, <16 x i32> <i32 0, i32 1, i32 2, i32 3, i32 4, i32 5, i32 6, i32 7, i32 0, i32 8, i32 9, i32 10, i32 11, i32 12, i32 13, i32 14>
 ; CHECK-NEXT:    store <16 x i8> [[TMP14]], ptr [[PTR]], align 2
 ; CHECK-NEXT:    ret void

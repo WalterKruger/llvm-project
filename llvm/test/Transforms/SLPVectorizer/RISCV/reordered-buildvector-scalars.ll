@@ -15,11 +15,11 @@ define fastcc i32 @test(i32 %0, i32 %add111.i.i, <4 x i32> %PredPel.i.sroa.86.72
 ; CHECK-NEXT:    [[SHR143_5_I_I9:%.*]] = ashr i32 [[TMP0]], 1
 ; CHECK-NEXT:    [[ADD1392_I:%.*]] = add i32 [[TMP0]], 1
 ; CHECK-NEXT:    [[MUL1445_I:%.*]] = shl i32 [[TMP0]], 1
-; CHECK-NEXT:    [[ADD2235_I16:%.*]] = or i32 [[TMP0]], 1
-; CHECK-NEXT:    [[ADD2323_I:%.*]] = add i32 [[TMP0]], 1
+; CHECK-NEXT:    [[ADD2235_I17:%.*]] = or i32 [[TMP0]], 1
+; CHECK-NEXT:    [[ADD2323_I1:%.*]] = add i32 [[TMP0]], 1
 ; CHECK-NEXT:    [[TMP2:%.*]] = insertelement <3 x i32> poison, i32 [[ADD111_I_I]], i32 0
 ; CHECK-NEXT:    [[TMP3:%.*]] = insertelement <3 x i32> [[TMP2]], i32 [[LOOPARRAY_SROA_24_0_I_I3]], i32 1
-; CHECK-NEXT:    [[TMP4:%.*]] = insertelement <3 x i32> [[TMP3]], i32 [[ADD2323_I]], i32 2
+; CHECK-NEXT:    [[TMP4:%.*]] = insertelement <3 x i32> [[TMP3]], i32 [[ADD2323_I1]], i32 2
 ; CHECK-NEXT:    [[TMP5:%.*]] = insertelement <3 x i32> poison, i32 [[TMP0]], i32 0
 ; CHECK-NEXT:    [[TMP6:%.*]] = shufflevector <3 x i32> [[TMP5]], <3 x i32> poison, <3 x i32> zeroinitializer
 ; CHECK-NEXT:    [[TMP7:%.*]] = or <3 x i32> [[TMP4]], [[TMP6]]
@@ -27,7 +27,7 @@ define fastcc i32 @test(i32 %0, i32 %add111.i.i, <4 x i32> %PredPel.i.sroa.86.72
 ; CHECK-NEXT:    [[TMP9:%.*]] = shufflevector <3 x i32> [[TMP4]], <3 x i32> poison, <8 x i32> <i32 poison, i32 poison, i32 1, i32 poison, i32 poison, i32 poison, i32 0, i32 poison>
 ; CHECK-NEXT:    [[TMP10:%.*]] = shufflevector <8 x i32> [[TMP8]], <8 x i32> [[TMP9]], <8 x i32> <i32 0, i32 poison, i32 10, i32 3, i32 poison, i32 poison, i32 14, i32 poison>
 ; CHECK-NEXT:    [[TMP11:%.*]] = insertelement <8 x i32> [[TMP10]], i32 [[TMP0]], i32 4
-; CHECK-NEXT:    [[TMP12:%.*]] = insertelement <8 x i32> [[TMP11]], i32 [[ADD2235_I16]], i32 1
+; CHECK-NEXT:    [[TMP12:%.*]] = insertelement <8 x i32> [[TMP11]], i32 [[ADD2235_I17]], i32 1
 ; CHECK-NEXT:    [[TMP13:%.*]] = insertelement <8 x i32> [[TMP12]], i32 [[MUL1445_I]], i32 5
 ; CHECK-NEXT:    [[TMP14:%.*]] = insertelement <8 x i32> [[TMP13]], i32 [[SHR143_5_I_I9]], i32 7
 ; CHECK-NEXT:    [[TMP15:%.*]] = add <8 x i32> [[TMP14]], <i32 1, i32 1, i32 1, i32 1, i32 1, i32 2, i32 1, i32 1>

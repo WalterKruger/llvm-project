@@ -57,7 +57,7 @@
 thread_local static int32_t defaultDevice = 0;
 
 /// Helper method that checks environment value for debugging.
-bool isDebugEnabled() {
+static bool isDebugEnabled() {
   const char *kDebugEnvironmentVariable = "MLIR_CUDA_DEBUG";
   static bool isEnabled = getenv(kDebugEnvironmentVariable) != nullptr;
   return isEnabled;
@@ -71,7 +71,7 @@ bool isDebugEnabled() {
   } while (0)
 
 // Returns default CUdevice
-CUdevice getDefaultCuDevice() {
+static CUdevice getDefaultCuDevice() {
   CUdevice device;
   CUDA_REPORT_IF_ERROR(cuDeviceGet(&device, /*ordinal=*/defaultDevice));
   return device;
@@ -124,8 +124,8 @@ mgpuModuleLoad(void *data, size_t /*gpuBlobSize*/) {
   return module;
 }
 
-extern "C" MLIR_CUDA_WRAPPERS_EXPORT CUmodule mgpuModuleLoadJIT(void *data,
-                                                                int optLevel) {
+extern "C" MLIR_CUDA_WRAPPERS_EXPORT CUmodule
+mgpuModuleLoadJIT(void *data, int optLevel, size_t /*assmeblySize*/) {
   ScopedContext scopedContext;
   CUmodule module = nullptr;
   char jitErrorBuffer[4096] = {0};

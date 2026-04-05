@@ -5,19 +5,7 @@ define i64 @test(ptr %p) {
 ; CHECK-LABEL: define i64 @test(
 ; CHECK-SAME: ptr [[P:%.*]]) {
 ; CHECK-NEXT:    [[TMP1:%.*]] = getelementptr i8, ptr [[P]], i64 12
-; CHECK-NEXT:    [[TMP13:%.*]] = xor <3 x i32> zeroinitializer, zeroinitializer
-; CHECK-NEXT:    [[TMP2:%.*]] = shufflevector <3 x i32> [[TMP13]], <3 x i32> poison, <4 x i32> <i32 0, i32 1, i32 2, i32 2>
-; CHECK-NEXT:    [[TMP3:%.*]] = xor <4 x i32> [[TMP2]], zeroinitializer
-; CHECK-NEXT:    [[TMP4:%.*]] = xor <4 x i32> [[TMP3]], zeroinitializer
-; CHECK-NEXT:    [[TMP5:%.*]] = xor <4 x i32> [[TMP4]], zeroinitializer
-; CHECK-NEXT:    [[TMP6:%.*]] = xor <4 x i32> [[TMP5]], zeroinitializer
-; CHECK-NEXT:    [[TMP7:%.*]] = xor <4 x i32> [[TMP6]], zeroinitializer
-; CHECK-NEXT:    [[TMP8:%.*]] = xor <4 x i32> [[TMP7]], zeroinitializer
-; CHECK-NEXT:    [[TMP9:%.*]] = xor <4 x i32> [[TMP8]], zeroinitializer
-; CHECK-NEXT:    [[TMP10:%.*]] = xor <4 x i32> [[TMP9]], zeroinitializer
-; CHECK-NEXT:    [[TMP11:%.*]] = xor <4 x i32> [[TMP10]], zeroinitializer
-; CHECK-NEXT:    [[TMP12:%.*]] = trunc <4 x i32> [[TMP11]] to <4 x i8>
-; CHECK-NEXT:    store <4 x i8> [[TMP12]], ptr [[TMP1]], align 1
+; CHECK-NEXT:    store <4 x i8> zeroinitializer, ptr [[TMP1]], align 1
 ; CHECK-NEXT:    ret i64 0
 ;
   %1 = getelementptr i8, ptr %p, i64 13
@@ -88,19 +76,7 @@ define i64 @test1(ptr %p) {
 ; CHECK-LABEL: define i64 @test1(
 ; CHECK-SAME: ptr [[P:%.*]]) {
 ; CHECK-NEXT:    [[TMP1:%.*]] = getelementptr i8, ptr [[P]], i64 12
-; CHECK-NEXT:    [[TMP13:%.*]] = xor <3 x i32> zeroinitializer, zeroinitializer
-; CHECK-NEXT:    [[TMP2:%.*]] = shufflevector <3 x i32> [[TMP13]], <3 x i32> poison, <4 x i32> <i32 0, i32 1, i32 2, i32 2>
-; CHECK-NEXT:    [[TMP3:%.*]] = xor <4 x i32> [[TMP2]], zeroinitializer
-; CHECK-NEXT:    [[TMP4:%.*]] = xor <4 x i32> [[TMP3]], zeroinitializer
-; CHECK-NEXT:    [[TMP5:%.*]] = xor <4 x i32> [[TMP4]], zeroinitializer
-; CHECK-NEXT:    [[TMP6:%.*]] = xor <4 x i32> [[TMP5]], zeroinitializer
-; CHECK-NEXT:    [[TMP7:%.*]] = xor <4 x i32> [[TMP6]], zeroinitializer
-; CHECK-NEXT:    [[TMP8:%.*]] = xor <4 x i32> [[TMP7]], zeroinitializer
-; CHECK-NEXT:    [[TMP9:%.*]] = xor <4 x i32> [[TMP8]], zeroinitializer
-; CHECK-NEXT:    [[TMP10:%.*]] = xor <4 x i32> [[TMP9]], zeroinitializer
-; CHECK-NEXT:    [[TMP11:%.*]] = xor <4 x i32> [[TMP10]], zeroinitializer
-; CHECK-NEXT:    [[TMP12:%.*]] = trunc <4 x i32> [[TMP11]] to <4 x i8>
-; CHECK-NEXT:    store <4 x i8> [[TMP12]], ptr [[TMP1]], align 1
+; CHECK-NEXT:    store <4 x i8> zeroinitializer, ptr [[TMP1]], align 1
 ; CHECK-NEXT:    ret i64 0
 ;
   %1 = getelementptr i8, ptr %p, i64 13

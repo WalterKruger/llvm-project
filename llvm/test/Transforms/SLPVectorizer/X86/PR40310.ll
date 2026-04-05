@@ -7,7 +7,7 @@ define void @mainTest(i32 %param, ptr %vals, i32 %len) {
 ; CHECK-NEXT:    [[TMP0:%.*]] = insertelement <16 x i32> <i32 poison, i32 31, i32 31, i32 31, i32 31, i32 31, i32 31, i32 31, i32 31, i32 31, i32 31, i32 31, i32 31, i32 31, i32 31, i32 31>, i32 [[PARAM:%.*]], i32 0
 ; CHECK-NEXT:    br label [[BCI_15:%.*]]
 ; CHECK:       bci_15:
-; CHECK-NEXT:    [[LOCAL_0_:%.*]] = phi i32 [ [[OP_RDX:%.*]], [[BCI_15]] ], [ [[PARAM]], [[BCI_15_PREHEADER:%.*]] ]
+; CHECK-NEXT:    [[LOCAL_0_:%.*]] = phi i32 [ [[OP_RDX:%.*]], [[BCI_15]] ], [ [[PARAM:%.*]], [[BCI_15_PREHEADER:%.*]] ]
 ; CHECK-NEXT:    [[LOCAL_4_:%.*]] = phi i32 [ [[V44:%.*]], [[BCI_15]] ], [ 31, [[BCI_15_PREHEADER]] ]
 ; CHECK-NEXT:    [[TMP2:%.*]] = phi <16 x i32> [ [[TMP6:%.*]], [[BCI_15]] ], [ [[TMP0]], [[BCI_15_PREHEADER]] ]
 ; CHECK-NEXT:    [[TMP3:%.*]] = add <16 x i32> [[TMP2]], <i32 -1, i32 1, i32 2, i32 3, i32 4, i32 5, i32 6, i32 7, i32 8, i32 9, i32 10, i32 11, i32 12, i32 13, i32 14, i32 15>

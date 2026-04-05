@@ -53,7 +53,7 @@ static inline Type *checkType(Type *Ty) {
 Value::Value(Type *ty, unsigned scid)
     : SubclassID(scid), HasValueHandle(0), SubclassOptionalData(0),
       SubclassData(0), NumUserOperands(0), IsUsedByMD(false), HasName(false),
-      HasMetadata(false), VTy(checkType(ty)) {
+      VTy(checkType(ty)) {
   static_assert(ConstantFirstVal == 0, "!(SubclassID < ConstantFirstVal)");
   // FIXME: Why isn't this in the subclass gunk??
   // Note, we cannot call isa<CallInst> before the CallInst has been
@@ -79,10 +79,6 @@ Value::~Value() {
     ValueHandleBase::ValueIsDeleted(this);
   if (isUsedByMetadata())
     ValueAsMetadata::handleDeletion(this);
-
-  // Remove associated metadata from context.
-  if (HasMetadata)
-    clearMetadata();
 
 #ifndef NDEBUG      // Only in -g mode...
   // Check to make sure that there are no uses of this value that are still
@@ -356,20 +352,27 @@ void Value::setNameImpl(const Twine &NewName) {
   if (getSymTab(this, ST))
     return;  // Cannot set a name on this value (e.g. constant).
 
+  ValueName *NewValueName = nullptr;
   if (!ST) { // No symbol table to update?  Just do the change.
+    if (!NameRef.empty()) {
+      // Create the new name.
+      MallocAllocator Allocator;
+      NewValueName = ValueName::create(NameRef, Allocator);
+    }
     // NOTE: Could optimize for the case the name is shrinking to not deallocate
     // then reallocated.
     destroyValueName();
 
-    if (!NameRef.empty()) {
-      // Create the new name.
+    if (NewValueName) {
       assert(NeedNewName);
-      MallocAllocator Allocator;
-      setValueName(ValueName::create(NameRef, Allocator));
+      setValueName(NewValueName);
       getValueName()->setValue(this);
     }
     return;
   }
+
+  if (!NameRef.empty())
+    NewValueName = ST->createValueName(NameRef, this);
 
   // NOTE: Could optimize for the case the name is shrinking to not deallocate
   // then reallocated.
@@ -383,8 +386,8 @@ void Value::setNameImpl(const Twine &NewName) {
   }
 
   // Name is changing to something new.
-  assert(NeedNewName);
-  setValueName(ST->createValueName(NameRef, this));
+  assert(NeedNewName && NewValueName != nullptr);
+  setValueName(NewValueName);
 }
 
 void Value::setName(const Twine &NewName) {
@@ -551,7 +554,7 @@ void Value::replaceNonMetadataUsesWith(Value *New) {
   doRAUW(New, ReplaceMetadataUses::No);
 }
 
-void Value::replaceUsesWithIf(Value *New,
+bool Value::replaceUsesWithIf(Value *New,
                               llvm::function_ref<bool(Use &U)> ShouldReplace) {
   assert(New && "Value::replaceUsesWithIf(<null>) is invalid!");
   assert(New->getType() == getType() &&
@@ -560,9 +563,12 @@ void Value::replaceUsesWithIf(Value *New,
   SmallVector<TrackingVH<Constant>, 8> Consts;
   SmallPtrSet<Constant *, 8> Visited;
 
+  bool Changed = false;
   for (Use &U : llvm::make_early_inc_range(uses())) {
     if (!ShouldReplace(U))
       continue;
+    Changed = true;
+
     // Must handle Constants specially, we cannot call replaceUsesOfWith on a
     // constant because they are uniqued.
     if (auto *C = dyn_cast<Constant>(U.getUser())) {
@@ -580,6 +586,8 @@ void Value::replaceUsesWithIf(Value *New,
     //        not just the one passed to ShouldReplace
     Consts.pop_back_val()->handleOperandChange(this, New);
   }
+
+  return Changed;
 }
 
 /// Replace debug record uses of MetadataAsValue(ValueAsMetadata(V)) outside BB
@@ -634,11 +642,12 @@ static const Value *stripPointerCastsAndOffsets(
     return V;
 
   // Even though we don't look through PHI nodes, we could be called on an
-  // instruction in an unreachable block, which may be on a cycle.
-  SmallPtrSet<const Value *, 4> Visited;
-
-  Visited.insert(V);
-  do {
+  // instruction in an unreachable block, which may be on a cycle. E.g.:
+  //   %gep = getelementptr inbounds nuw i8, ptr %gep, i64 32
+  //
+  // Bound against that case with a simple iteration counter. Practically, more
+  // than 10 iterations are almost never needed.
+  for (unsigned N = 0; N < 12; ++N) {
     Func(V);
     if (auto *GEP = dyn_cast<GEPOperator>(V)) {
       switch (StripKind) {
@@ -658,7 +667,11 @@ static const Value *stripPointerCastsAndOffsets(
           return V;
         break;
       }
-      V = GEP->getPointerOperand();
+      const Value *NewV = GEP->getPointerOperand();
+      // Quick exit for degenerate IR, which can happen in unreachable blocks.
+      if (NewV == V)
+        return V;
+      V = NewV;
     } else if (Operator::getOpcode(V) == Instruction::BitCast) {
       Value *NewV = cast<Operator>(V)->getOperand(0);
       if (!NewV->getType()->isPointerTy())
@@ -693,7 +706,7 @@ static const Value *stripPointerCastsAndOffsets(
       return V;
     }
     assert(V->getType()->isPointerTy() && "Unexpected operand type!");
-  } while (Visited.insert(V).second);
+  }
 
   return V;
 }
@@ -767,7 +780,7 @@ const Value *Value::stripAndAccumulateConstantOffsets(
         APInt OldOffset = Offset;
         Offset = Offset.sadd_ov(GEPOffsetST, Overflow);
         if (Overflow) {
-          Offset = OldOffset;
+          Offset = std::move(OldOffset);
           return V;
         }
       }
@@ -836,7 +849,8 @@ bool Value::canBeFreed() const {
       return false;
   }
 
-  if (isa<IntToPtrInst>(this) && getMetadata(LLVMContext::MD_nofree))
+  if (auto *ITP = dyn_cast<IntToPtrInst>(this);
+      ITP && ITP->hasMetadata(LLVMContext::MD_nofree))
     return false;
 
   const Function *F = nullptr;
@@ -935,9 +949,8 @@ uint64_t Value::getPointerDereferenceableBytes(const DataLayout &DL,
       CanBeNull = true;
     }
   } else if (auto *AI = dyn_cast<AllocaInst>(this)) {
-    if (!AI->isArrayAllocation()) {
-      DerefBytes =
-          DL.getTypeStoreSize(AI->getAllocatedType()).getKnownMinValue();
+    if (std::optional<TypeSize> Size = AI->getAllocationSize(DL)) {
+      DerefBytes = Size->getKnownMinValue();
       CanBeNull = false;
       CanBeFreed = false;
     }
@@ -1095,8 +1108,6 @@ const Value *Value::DoPHITranslation(const BasicBlock *CurBB,
     return PN->getIncomingValueForBlock(PredBB);
   return this;
 }
-
-LLVMContext &Value::getContext() const { return VTy->getContext(); }
 
 void Value::reverseUseList() {
   if (!UseList || !UseList->Next)
