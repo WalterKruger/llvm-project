@@ -7696,11 +7696,10 @@ BoUpSLP::LoadsState BoUpSLP::canVectorizeLoads(
         InstructionCost VectorGEPCost =
             (LS == LoadsState::ScatterVectorize && ProfitableGatherPointers)
                 ? 0
-                : getGEPCosts(TTI,
-                              ArrayRef(PointerOps).slice(SliceStart, SliceVF),
-                              LI0->getPointerOperand(),
-                              Instruction::GetElementPtr, CostKind, ScalarTy,
-                              SubVecTy)
+                : getGEPCosts(
+                      TTI, ArrayRef(PointerOps).slice(SliceStart, SliceVF),
+                      LI0->getPointerOperand(), Instruction::GetElementPtr,
+                      CostKind, ScalarTy, SubVecTy)
                       .second;
         if (LS == LoadsState::ScatterVectorize) {
           if (static_cast<unsigned>(
@@ -19427,8 +19426,8 @@ BoUpSLP::isGatherShuffledSingleRegisterEntry(
   Entries.swap(TempEntries);
   if (EntryLanes.size() == Entries.size() &&
       !VL.equals(ArrayRef(TE->Scalars)
-                     .slice(MaskBase, getNumElems(TE->Scalars.size(),
-                                                  SliceSize, Part)))) {
+                     .slice(MaskBase, getNumElems(TE->Scalars.size(), SliceSize,
+                                                  Part)))) {
     // We may have here 1 or 2 entries only. If the number of scalars is equal
     // to the number of entries, no need to do the analysis, it is not very
     // profitable. Since VL is not the same as TE->Scalars, it means we already
@@ -25444,10 +25443,9 @@ SLPVectorizerPass::vectorizeStoreChain(ArrayRef<Value *> Chain, BoUpSLP &R,
       Analysis.buildInstructionsState(ValOps.getArrayRef(), R);
   if (all_of(ValOps, IsaPred<Instruction>) && ValOps.size() > 1) {
     DenseSet<Value *> Stores(Chain.begin(), Chain.end());
-    bool IsAllowedSize =
-        hasFullVectorsOrPowerOf2(*TTI, ValOps.front()->getType(),
-                                 ValOps.size()) ||
-        isAllowedNonPowerOf2VF(ValOps.size());
+    bool IsAllowedSize = hasFullVectorsOrPowerOf2(
+                             *TTI, ValOps.front()->getType(), ValOps.size()) ||
+                         isAllowedNonPowerOf2VF(ValOps.size());
     if ((!IsAllowedSize && S && S.getOpcode() != Instruction::Load &&
          (!S.getMainOp()->isSafeToRemove() ||
           any_of(ValOps.getArrayRef(),
