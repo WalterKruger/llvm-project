@@ -141,6 +141,4 @@ do.body:
 
 declare <16 x float> @llvm.amdgcn.mfma.f32.32x32x8f16(<4 x half>, <4 x half>, <16 x float>, i32 immarg, i32 immarg, i32 immarg)
 
-uselistorder ptr @llvm.amdgcn.mfma.f32.32x32x8f16, { 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 13, 12, 11, 10, 9, 8, 7, 14, 6, 5, 4, 3, 2, 1, 0 }
-
 attributes #0 = { "amdgpu-flat-work-group-size"="1,256" "amdgpu-lds-size"="32768" }
