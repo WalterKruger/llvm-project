@@ -555,9 +555,11 @@ void AMDGPURewriteAGPRCopyMFMAImpl::eliminateSpillsOfReassignedVGPRs() const {
       SmallVector<LiveInterval *, 4> SplitLIs;
       LIS.splitSeparateComponents(NewLI, SplitLIs);
 
-      LLVM_DEBUG(if (!SplitLIs.empty()) {
-        dbgs() << "Split unspilled interval into " << (SplitLIs.size() + 1)
-               << " components\n";
+      LLVM_DEBUG({
+        if (!SplitLIs.empty()) {
+          dbgs() << "Split unspilled interval into " << (SplitLIs.size() + 1)
+                 << " components\n";
+        }
       });
 
       LRM.assign(NewLI, PhysReg);
