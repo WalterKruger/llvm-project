@@ -279,7 +279,7 @@ foreach op = ["add", "sub", "and", "or", "xor", "nand", "min", "max", "umax",
 
 let Defs = [CR0] in {
   def ATOMIC_CMP_SWAP_I64 : PPCCustomInserterPseudo<
-    (outs g8rc:$dst), (ins memrr:$ptr, i32imm:$sz, g8rc:$old, g8rc:$new),
+    (outs g8rc:$dst), (ins memrr:$ptr, g8rc:$old, g8rc:$new),
     "#" # NAME, []>;
 
   def ATOMIC_SWAP_I64 : PPCCustomInserterPseudo<
@@ -288,7 +288,7 @@ let Defs = [CR0] in {
 }
 
 def : Pat<(i64 (atomic_cmp_swap_i64 ForceXForm:$ptr, g8rc:$old, g8rc:$new)),
-          (ATOMIC_CMP_SWAP_I64 memrr:$ptr, 8, i64:$old, i64:$new)>;
+          (ATOMIC_CMP_SWAP_I64 memrr:$ptr, i64:$old, i64:$new)>;
 def : Pat<(i64 (atomic_swap_i64 ForceXForm:$ptr, g8rc:$new)),
           (ATOMIC_SWAP_I64 memrr:$ptr, 8, i64:$new)>;
 

@@ -2030,10 +2030,10 @@ foreach bitsz = [8, 16, 32] in {
   defvar pat = !cast<PatFrag>(!tolower(pseudo));
   let Defs = [CR0] in
     def pseudo : PPCCustomInserterPseudo<
-      (outs gprc:$dst), (ins memrr:$ptr, i32imm:$sz, gprc:$old, gprc:$new),
+      (outs gprc:$dst), (ins memrr:$ptr, gprc:$old, gprc:$new),
       "#" # NAME,[]>;
   def : Pat<(i32 (pat ForceXForm:$ptr, gprc:$old, gprc:$new)),
-          (!cast<Instruction>(pseudo) memrr:$ptr, !div(bitsz, 8), gprc:$old, gprc:$new)>;
+          (!cast<Instruction>(pseudo) memrr:$ptr, gprc:$old, gprc:$new)>;
 }
 
 foreach bitsz = [8, 16, 32] in {
@@ -2048,9 +2048,9 @@ foreach bitsz = [8, 16, 32] in {
 }
 
 def : Pat<(PPCatomicCmpSwap_8 ForceXForm:$ptr, i32:$old, i32:$new),
-        (ATOMIC_CMP_SWAP_I8 ForceXForm:$ptr, 1, i32:$old, i32:$new)>;
+        (ATOMIC_CMP_SWAP_I8 ForceXForm:$ptr, i32:$old, i32:$new)>;
 def : Pat<(PPCatomicCmpSwap_16 ForceXForm:$ptr, i32:$old, i32:$new),
-        (ATOMIC_CMP_SWAP_I16 ForceXForm:$ptr, 2, i32:$old, i32:$new)>;
+        (ATOMIC_CMP_SWAP_I16 ForceXForm:$ptr, i32:$old, i32:$new)>;
 
 // Instructions to support atomic operations
 let mayLoad = 1, mayStore = 1, hasSideEffects = 1 in {
