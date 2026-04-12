@@ -9,8 +9,11 @@ define fastcc void @_ZN12_GLOBAL__N_127PolynomialMultiplyRecognize9recognizeEv(i
 ; CHECK-NEXT:  entry:
 ; CHECK-NEXT:    br i1 [[ARG:%.*]], label [[IF_END50_I:%.*]], label [[IF_THEN22_I:%.*]]
 ; CHECK:       if.then22.i:
-; CHECK-NEXT:    [[TMP0:%.*]] = insertelement <16 x i32> <i32 poison, i32 undef, i32 undef, i32 undef, i32 undef, i32 undef, i32 undef, i32 undef, i32 undef, i32 undef, i32 undef, i32 undef, i32 undef, i32 undef, i32 undef, i32 undef>, i32 undef, i32 0
-; CHECK-NEXT:    [[TMP3:%.*]] = and <16 x i32> [[TMP0]], <i32 -1, i32 undef, i32 undef, i32 undef, i32 undef, i32 undef, i32 undef, i32 undef, i32 undef, i32 undef, i32 undef, i32 undef, i32 undef, i32 undef, i32 undef, i32 undef>
+; CHECK-NEXT:    [[SUB_I:%.*]] = add nsw i32 undef, -1
+; CHECK-NEXT:    [[TMP0:%.*]] = insertelement <2 x i32> poison, i32 [[SUB_I]], i32 0
+; CHECK-NEXT:    [[TMP1:%.*]] = shufflevector <2 x i32> [[TMP0]], <2 x i32> poison, <2 x i32> zeroinitializer
+; CHECK-NEXT:    [[TMP2:%.*]] = and <2 x i32> [[TMP1]], <i32 -1, i32 undef>
+; CHECK-NEXT:    [[TMP3:%.*]] = shufflevector <2 x i32> [[TMP2]], <2 x i32> poison, <16 x i32> <i32 0, i32 1, i32 1, i32 1, i32 1, i32 1, i32 1, i32 1, i32 1, i32 1, i32 1, i32 1, i32 1, i32 1, i32 1, i32 1>
 ; CHECK-NEXT:    [[TMP4:%.*]] = lshr <16 x i32> [[TMP3]], <i32 0, i32 1, i32 2, i32 3, i32 4, i32 5, i32 6, i32 7, i32 8, i32 9, i32 10, i32 11, i32 12, i32 13, i32 14, i32 15>
 ; CHECK-NEXT:    [[TMP16:%.*]] = trunc <16 x i32> [[TMP4]] to <16 x i8>
 ; CHECK-NEXT:    [[TMP17:%.*]] = and <16 x i8> [[TMP16]], splat (i8 1)
