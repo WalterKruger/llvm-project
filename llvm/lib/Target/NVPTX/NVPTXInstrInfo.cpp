@@ -16,6 +16,7 @@
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include <optional>
 
 using namespace llvm;
 
@@ -209,4 +210,183 @@ bool NVPTXInstrInfo::reverseBranchCondition(
   else
     return true;
   return false;
+}
+
+bool NVPTXInstrInfo::invertPredicateBranchInstr(MachineBasicBlock &MBB) const {
+  MachineBasicBlock *TBB = nullptr, *FBB = nullptr;
+  SmallVector<MachineOperand, 4> Cond;
+  if (analyzeBranch(MBB, TBB, FBB, Cond, /*AllowModify=*/false))
+    return false;
+  if (Cond.empty())
+    return false;
+  if (reverseBranchCondition(Cond))
+    return false;
+  DebugLoc DL = MBB.findBranchDebugLoc();
+  removeBranch(MBB);
+  insertBranch(MBB, TBB, FBB, Cond, DL);
+  return true;
+}
+
+static bool isIntegerSetp(const MachineInstr &MI) {
+  switch (MI.getOpcode()) {
+  case NVPTX::SETP_i16rr:
+  case NVPTX::SETP_i16ri:
+  case NVPTX::SETP_i16ir:
+  case NVPTX::SETP_i32rr:
+  case NVPTX::SETP_i32ri:
+  case NVPTX::SETP_i32ir:
+  case NVPTX::SETP_i64rr:
+  case NVPTX::SETP_i64ri:
+  case NVPTX::SETP_i64ir:
+    return true;
+  default:
+    return false;
+  }
+}
+
+static bool isFloatSetp(const MachineInstr &MI) {
+  switch (MI.getOpcode()) {
+  // TODO: Because these generate 2 predicates ISel doesn't duplicate the
+  // computation but rather directly lowers it to `not.pred` if we need the
+  // inverse. This means for patterns like these tests we would want to
+  // speculatively invert the `not.pred` instruction rather than the comparison.
+  // case NVPTX::SETP_bf16x2rr:
+  // case NVPTX::SETP_f16x2rr:
+  case NVPTX::SETP_bf16rr:
+  case NVPTX::SETP_f16rr:
+  case NVPTX::SETP_f32rr:
+  case NVPTX::SETP_f32ri:
+  case NVPTX::SETP_f32ir:
+  case NVPTX::SETP_f64rr:
+  case NVPTX::SETP_f64ri:
+  case NVPTX::SETP_f64ir:
+    return true;
+  default:
+    return false;
+  }
+}
+
+static std::optional<int64_t> invertIntegerCmpMode(int64_t Mode) {
+  switch (Mode) {
+  case NVPTX::PTXCmpMode::EQ:
+    return NVPTX::PTXCmpMode::NE;
+  case NVPTX::PTXCmpMode::NE:
+    return NVPTX::PTXCmpMode::EQ;
+  case NVPTX::PTXCmpMode::LT:
+    return NVPTX::PTXCmpMode::GE;
+  case NVPTX::PTXCmpMode::LE:
+    return NVPTX::PTXCmpMode::GT;
+  case NVPTX::PTXCmpMode::GT:
+    return NVPTX::PTXCmpMode::LE;
+  case NVPTX::PTXCmpMode::GE:
+    return NVPTX::PTXCmpMode::LT;
+  case NVPTX::PTXCmpMode::LTU:
+    return NVPTX::PTXCmpMode::GEU;
+  case NVPTX::PTXCmpMode::LEU:
+    return NVPTX::PTXCmpMode::GTU;
+  case NVPTX::PTXCmpMode::GTU:
+    return NVPTX::PTXCmpMode::LEU;
+  case NVPTX::PTXCmpMode::GEU:
+    return NVPTX::PTXCmpMode::LTU;
+  default:
+    return std::nullopt;
+  }
+}
+
+static std::optional<int64_t> invertFloatCmpMode(int64_t Mode) {
+  switch (Mode) {
+  case NVPTX::PTXCmpMode::EQ:
+    return NVPTX::PTXCmpMode::NEU;
+  case NVPTX::PTXCmpMode::NE:
+    return NVPTX::PTXCmpMode::EQU;
+  case NVPTX::PTXCmpMode::EQU:
+    return NVPTX::PTXCmpMode::NE;
+  case NVPTX::PTXCmpMode::NEU:
+    return NVPTX::PTXCmpMode::EQ;
+  case NVPTX::PTXCmpMode::LT:
+    return NVPTX::PTXCmpMode::GEU;
+  case NVPTX::PTXCmpMode::LE:
+    return NVPTX::PTXCmpMode::GTU;
+  case NVPTX::PTXCmpMode::GT:
+    return NVPTX::PTXCmpMode::LEU;
+  case NVPTX::PTXCmpMode::GE:
+    return NVPTX::PTXCmpMode::LTU;
+  case NVPTX::PTXCmpMode::LTU:
+    return NVPTX::PTXCmpMode::GE;
+  case NVPTX::PTXCmpMode::LEU:
+    return NVPTX::PTXCmpMode::GT;
+  case NVPTX::PTXCmpMode::GTU:
+    return NVPTX::PTXCmpMode::LE;
+  case NVPTX::PTXCmpMode::GEU:
+    return NVPTX::PTXCmpMode::LT;
+  case NVPTX::PTXCmpMode::NUM:
+    return NVPTX::PTXCmpMode::NotANumber;
+  case NVPTX::PTXCmpMode::NotANumber:
+    return NVPTX::PTXCmpMode::NUM;
+  default:
+    return std::nullopt;
+  }
+}
+
+static bool invertCompareInstr(MachineInstr &MI) {
+  MachineOperand &ModeOp = MI.getOperand(3);
+  assert(ModeOp.isImm() && "SETP mode operand must be an immediate");
+
+  std::optional<int64_t> Inverted;
+  if (isIntegerSetp(MI))
+    Inverted = invertIntegerCmpMode(ModeOp.getImm());
+  else if (isFloatSetp(MI))
+    Inverted = invertFloatCmpMode(ModeOp.getImm());
+
+  if (!Inverted)
+    return false;
+
+  ModeOp.setImm(*Inverted);
+  return true;
+}
+
+bool NVPTXInstrInfo::findCommutedOpIndices(const MachineInstr &MI,
+                                           unsigned &SrcOpIdx1,
+                                           unsigned &SrcOpIdx2) const {
+  if (isIntegerSetp(MI) || isFloatSetp(MI))
+    return fixCommutedOpIndices(SrcOpIdx1, SrcOpIdx2, 1, 2);
+  return TargetInstrInfo::findCommutedOpIndices(MI, SrcOpIdx1, SrcOpIdx2);
+}
+
+MachineInstr *NVPTXInstrInfo::commuteInstructionImpl(MachineInstr &MI,
+                                                     bool NewMI,
+                                                     unsigned OpIdx1,
+                                                     unsigned OpIdx2) const {
+  assert(!NewMI && "this should never be used");
+
+  if (!isIntegerSetp(MI) && !isFloatSetp(MI))
+    return TargetInstrInfo::commuteInstructionImpl(MI, NewMI, OpIdx1, OpIdx2);
+
+  if (!invertCompareInstr(MI))
+    return nullptr;
+
+  // For now all users must be invertible conditional branches.
+  // TODO: support other users such as selects.
+  bool AllInverted = true;
+  MachineRegisterInfo &MRI = MI.getParent()->getParent()->getRegInfo();
+  for (MachineInstr &UseMI :
+       MRI.use_nodbg_instructions(MI.getOperand(0).getReg())) {
+    if (!(UseMI.isConditionalBranch() &&
+          invertPredicateBranchInstr(*UseMI.getParent()))) {
+      AllInverted = false;
+      break;
+    }
+  }
+
+  if (!AllInverted) {
+    for (MachineInstr &UseMI :
+         MRI.use_nodbg_instructions(MI.getOperand(0).getReg())) {
+      if (!(UseMI.isConditionalBranch() &&
+            invertPredicateBranchInstr(*UseMI.getParent())))
+        break;
+    }
+    invertCompareInstr(MI);
+    return nullptr;
+  }
+  return &MI;
 }
