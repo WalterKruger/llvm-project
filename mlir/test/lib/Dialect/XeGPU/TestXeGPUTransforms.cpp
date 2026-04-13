@@ -106,10 +106,9 @@ struct TestXeGPUUnrollingPatterns
         }
 
         if (auto layout = tdescTy.getLayoutAttr()) {
-          auto inst_data = layout.getInstData();
-          if (inst_data && layout.isForSubgroup())
-            return SmallVector<int64_t>(inst_data.asArrayRef().begin(),
-                                        inst_data.asArrayRef().end());
+          auto inst_data = layout.getEffectiveInstDataAsInt();
+          if (!inst_data.empty() && layout.isForSubgroup())
+            return SmallVector<int64_t>(inst_data.begin(), inst_data.end());
         }
       }
 
@@ -138,9 +137,9 @@ struct TestXeGPUUnrollingPatterns
 
               if (chunkSize > 1) {
                 int64_t blockedChunkSize = chunkSize;
-                auto instData = layout.getInstData();
+                auto instData = layout.getEffectiveInstDataAsInt();
                 if (!instData.empty())
-                  blockedChunkSize = instData.asArrayRef().back();
+                  blockedChunkSize = instData.back();
 
                 // To create a new attribute with a different chunk_size:
                 auto newEncoding = xegpu::ScatterTensorDescAttr::get(
@@ -150,7 +149,7 @@ struct TestXeGPUUnrollingPatterns
               }
             }
             if (layout) {
-              if (layout.getLaneLayout() == nullptr)
+              if (layout.getEffectiveLaneLayoutAsInt().empty())
                 layout = xegpu::LayoutAttr();
               else
                 layout = layout.dropInstData();
@@ -273,12 +272,6 @@ struct TestXeGPUSgToWiDistributeExperimental
            "Work-item Distribution";
   }
 
-  Option<bool> enableRewriteMultiReductionToReductions{
-      *this, "enable-rewrite-multi-reduction-to-reductions",
-      llvm::cl::desc("Partially lower multi-reduction ops to reduction ops if "
-                     "the reduction dimension is distributed."),
-      llvm::cl::init(false)};
-
   void getDependentDialects(::mlir::DialectRegistry &registry) const override {
     registry.insert<arith::ArithDialect>();
     registry.insert<memref::MemRefDialect>();
@@ -294,6 +287,12 @@ struct TestXeGPUSgToWiDistributeExperimental
       : PassWrapper(pass) {}
 
   void runOnOperation() override {
+    Operation *op = getOperation();
+    if (!xegpu::recoverTemporaryLayouts(op)) {
+      signalPassFailure();
+      return;
+    }
+
     MLIRContext *ctx = &getContext();
     TypeConverter typeConverter;
     // Define type materializations using UnrealizedConversionCastOp.
@@ -306,23 +305,11 @@ struct TestXeGPUSgToWiDistributeExperimental
     typeConverter.addSourceMaterialization(materializeCast);
     typeConverter.addTargetMaterialization(materializeCast);
 
-    // If `enableRewriteMultiReductionToReductions` is set, only focus on
-    // testing the partial lowering of vector::MultiReductionOp.
-    if (enableRewriteMultiReductionToReductions) {
-      xegpu::populateXeGPUSgToWiDistributeTypeConversions(typeConverter);
-      ConversionTarget target(*ctx);
-      RewritePatternSet patterns(ctx);
-      xegpu::populateXeGPUSgToWiLowerVectorMultiReductionAndLegality(patterns,
-                                                                     target);
-      (void)applyPartialConversion(getOperation(), target, std::move(patterns));
-      return;
-    }
-
     ConversionTarget target(*ctx);
     RewritePatternSet patterns(ctx);
     xegpu::populateXeGPUSgToWiDistributeTypeConversionAndLegality(
         typeConverter, patterns, target);
-    (void)applyPartialConversion(getOperation(), target, std::move(patterns));
+    (void)applyPartialConversion(op, target, std::move(patterns));
   }
 };
 
@@ -395,7 +382,7 @@ struct TestXeGPUPropagateLayouts
       signalPassFailure();
       return;
     }
-    if (failed(xegpu::propagateLayouts(builder, getOperation(), kind))) {
+    if (failed(xegpu::propagateLayouts(builder, getOperation(), kind, 32))) {
       signalPassFailure();
     }
   }
@@ -424,9 +411,8 @@ struct TestXeGPUResolveLayoutConflicts
       default;
 
   void runOnOperation() override {
-    if (failed(xegpu::resolveLayoutConflicts(getOperation()))) {
+    if (failed(xegpu::resolveLayoutConflicts(getOperation())))
       signalPassFailure();
-    }
   }
 };
 
