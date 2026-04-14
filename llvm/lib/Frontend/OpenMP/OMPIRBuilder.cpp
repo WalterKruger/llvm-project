@@ -10476,7 +10476,7 @@ OpenMPIRBuilder::InsertPointOrErrorTy OpenMPIRBuilder::createAtomicUpdate(
     Type *XElemTy = X.ElemTy;
     assert((XElemTy->isFloatingPointTy() || XElemTy->isIntegerTy() ||
             XElemTy->isPointerTy() || XElemTy->isStructTy()) &&
-           "OMP atomic update expected a scalar type");
+           "OMP atomic update expected a scalar or struct type");
     assert((RMWOp != AtomicRMWInst::Max) && (RMWOp != AtomicRMWInst::Min) &&
            (RMWOp != AtomicRMWInst::UMax) && (RMWOp != AtomicRMWInst::UMin) &&
            "OpenMP atomic does not support LT or GT operations");
@@ -10711,7 +10711,7 @@ OpenMPIRBuilder::InsertPointOrErrorTy OpenMPIRBuilder::createAtomicCapture(
     Type *XElemTy = X.ElemTy;
     assert((XElemTy->isFloatingPointTy() || XElemTy->isIntegerTy() ||
             XElemTy->isPointerTy() || XElemTy->isStructTy()) &&
-           "OMP atomic capture expected a scalar type");
+           "OMP atomic capture expected a scalar or struct type");
     assert((RMWOp != AtomicRMWInst::Max) && (RMWOp != AtomicRMWInst::Min) &&
            "OpenMP atomic does not support LT or GT operations");
   });
