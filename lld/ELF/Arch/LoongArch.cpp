@@ -494,7 +494,6 @@ void LoongArch::scanSectionImpl(InputSectionBase &sec, Relocs<RelTy> rels) {
     // (fast-path helpers, TLS) call a handler and use `continue`.
     switch (type) {
     case R_LARCH_NONE:
-    case R_LARCH_MARK_LA:
     case R_LARCH_MARK_PCREL:
       continue;
 
@@ -701,6 +700,12 @@ void LoongArch::scanSectionImpl(InputSectionBase &sec, Relocs<RelTy> rels) {
       if (ctx.arg.relax)
         sec.addReloc({R_RELAX_HINT, type, offset, addend, &sym});
       continue;
+
+    // R_LARCH_MARK_LA marks a la.abs sequence. It is not used for
+    // relocation computation, but must be preserved for --emit-relocs.
+    //
+    // Treat it as a relax hint so it is retained without affecting codegen.
+    case R_LARCH_MARK_LA:
     case R_LARCH_ALIGN:
       sec.addReloc({R_RELAX_HINT, type, offset, addend, &sym});
       continue;
