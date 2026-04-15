@@ -35,7 +35,7 @@
 # CASE3-NEXT: lu32i.d $a1, -4661
 # CASE3-NEXT: lu52i.d $a1, $a1, 0
 
-# RUN: ld.lld %t.la64.o --defsym foo=0xfffffeeeeeddd --defsym bar=0xfff00000f1111222 -o %t.la64.4
+# RUN: ld.lld %t.la64.o --emit-relocs --defsym foo=0xfffffeeeeeddd --defsym bar=0xfff00000f1111222 -o %t.la64.4
 # RUN: llvm-objdump --no-show-raw-insn -d %t.la64.4 | FileCheck --check-prefix=CASE4 %s
 # CASE4:      lu12i.w $a0, -69906
 # CASE4-NEXT: ori     $a0, $a0, 3549
@@ -46,19 +46,12 @@
 # CASE4-NEXT: lu32i.d $a1, 0
 # CASE4-NEXT: lu52i.d $a1, $a1, -1
 
+# RUN: llvm-readobj -r %t.la64.4 | FileCheck --check-prefix=MARK-LA %s
+# MARK-LA:      R_LARCH_MARK_LA
+# MARK-LA:      R_LARCH_MARK_LA
+
 .global _start
 
 _start:
-1:
-    lu12i.w $a0, %abs_hi20(foo)
-.reloc 1b, R_LARCH_MARK_LA, foo
-    ori     $a0, $a0, %abs_lo12(foo)
-    lu32i.d $a0, %abs64_lo20(foo)
-    lu52i.d $a0, $a0, %abs64_hi12(foo)
-
-2:
-    lu12i.w $a1, %abs_hi20(bar)
-.reloc 1b, R_LARCH_MARK_LA, bar
-    ori     $a1, $a1, %abs_lo12(bar)
-    lu32i.d $a1, %abs64_lo20(bar)
-    lu52i.d $a1, $a1, %abs64_hi12(bar)
+    la.abs $a0, foo
+    la.abs $a1, bar
