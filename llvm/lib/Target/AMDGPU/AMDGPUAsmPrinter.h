@@ -15,7 +15,9 @@
 #define LLVM_LIB_TARGET_AMDGPU_AMDGPUASMPRINTER_H
 
 #include "AMDGPUMCResourceInfo.h"
+#include "AMDGPUResourceUsageAnalysis.h"
 #include "SIProgramInfo.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/CodeGen/AsmPrinter.h"
 
 namespace llvm {
@@ -85,6 +87,18 @@ private:
                             const SIProgramInfo &PI) const;
 
   void initTargetStreamer(Module &M);
+
+  void emitAMDGPUInfo(Module &M);
+  void collectCallEdge(const MachineInstr &MI);
+
+  SetVector<std::pair<MCSymbol *, MCSymbol *>> DirectCallEdges;
+
+  struct PerFunctionResourceInfo {
+    const Function *F = nullptr;
+    AMDGPUResourceUsageAnalysisImpl::SIFunctionResourceInfo RI;
+    uint32_t Occupancy = 0;
+  };
+  SmallVector<PerFunctionResourceInfo> FunctionResourceInfos;
 
   SmallString<128> getMCExprStr(const MCExpr *Value);
 

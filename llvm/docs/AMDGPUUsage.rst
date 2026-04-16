@@ -2835,6 +2835,8 @@ An AMDGPU target ELF code object has the standard ELF sections which include:
      ``.strtab``        ``SHT_STRTAB``   *none*
      ``.symtab``        ``SHT_SYMTAB``   *none*
      ``.text``          ``SHT_PROGBITS`` ``SHF_ALLOC`` + ``SHF_EXECINSTR``
+     ``.amdgpu.info``   ``SHT_PROGBITS`` ``SHF_EXCLUDE``
+     ``.amdgpu.strtab`` ``SHT_STRTAB``   ``SHF_EXCLUDE``
      ================== ================ =================================
 
 These sections have their standard meanings (see [ELF]_) and are only generated
@@ -2869,6 +2871,69 @@ if needed.
 
 ``.amdgpu.kernel.runtime.handle``
   Symbols used for device enqueue.
+
+.. _amdgpu-info-section:
+
+``.amdgpu.info``
+  Per-function metadata for AMDGPU object linking, emitted only in relocatable
+  code objects when object linking is enabled
+  (``-amdgpu-enable-object-linking``).  The linker uses this section to
+  propagate resource usage (registers, stack, LDS) and resolve call graph
+  dependencies across translation units.
+
+  Each entry uses a tagged, length-prefixed binary encoding:
+
+  .. code-block:: none
+
+     [kind: u8] [len: u8] [payload: <len> bytes]
+
+  A function scope is opened by an ``INFO_FUNC`` entry whose payload is an
+  8-byte relocated symbol reference.  All subsequent entries until the next
+  ``INFO_FUNC`` or end of section belong to that scope.  The format is
+  forward-compatible: unknown kinds can be skipped by reading the length byte.
+
+  .. table:: AMDGPU Info Entry Kinds
+     :name: amdgpu-info-entry-kinds-table
+
+     ===== ============================== ==========================================
+     Value Name                           Payload
+     ===== ============================== ==========================================
+     1     ``INFO_FUNC``                  8B symbol ref; opens function scope
+     2     ``INFO_NUM_VGPR``              u32; architectural VGPRs used
+     3     ``INFO_NUM_AGPR``              u32; accumulator VGPRs (AGPRs) used
+     4     ``INFO_NUM_SGPR``              u32; SGPRs explicitly used
+     5     ``INFO_PRIVATE_SEGMENT_SIZE``  u32; private (scratch) segment bytes
+     6     ``INFO_OCCUPANCY``             u32; target occupancy (waves per EU)
+     7     ``INFO_FLAGS``                 u32; ``FuncInfoFlags`` bitfield
+     8     ``INFO_USE``                   8B symbol ref; resource dependency edge
+     9     ``INFO_CALL``                  8B symbol ref; direct call edge
+     10    ``INFO_INDIRECT_CALL``         u32 strtab offset; indirect call type-ID
+     11    ``INFO_TYPEID``                u32 strtab offset; function type-ID
+     ===== ============================== ==========================================
+
+  .. table:: AMDGPU Info Function Flags (``INFO_FLAGS``)
+     :name: amdgpu-info-flags-table
+
+     ===== =========================== ==========================================
+     Bit   Name                        Description
+     ===== =========================== ==========================================
+     0x1   ``FUNC_IS_KERNEL``          Function is a kernel entry point
+     0x2   ``FUNC_USES_VCC``           Function uses the VCC register
+     0x4   ``FUNC_USES_FLAT_SCRATCH``  Function uses flat scratch addressing
+     0x8   ``FUNC_HAS_DYN_STACK``      Function has dynamic stack allocation
+     ===== =========================== ==========================================
+
+  Symbol references (``INFO_FUNC``, ``INFO_USE``, ``INFO_CALL``) generate
+  ``R_AMDGPU_ABS64`` relocations in ``.rela.amdgpu.info``.  String payloads
+  (``INFO_INDIRECT_CALL``, ``INFO_TYPEID``) store a ``u32`` offset into
+  the companion ``.amdgpu.strtab`` section.
+
+  See :ref:`amdgpu-assembler-directive-amdgpu-info` for the assembly syntax.
+
+``.amdgpu.strtab``
+  Null-terminated string pool for the ``.amdgpu.info`` section.  Contains
+  type-ID strings referenced by ``INFO_INDIRECT_CALL`` and ``INFO_TYPEID``
+  entries.  Only present when ``.amdgpu.info`` requires string data.
 
 .. _amdgpu-note-records:
 
@@ -21762,6 +21827,51 @@ semantics described in :ref:`amdgpu-amdhsa-code-object-metadata-v3`,
 :ref:`amdgpu-amdhsa-code-object-metadata-v5`.
 
 This directive is terminated by an ``.end_amdgpu_metadata`` directive.
+
+.. _amdgpu-assembler-directive-amdgpu-info:
+
+.amdgpu_info <symbol>
++++++++++++++++++++++
+
+Begins a per-function metadata block for ``<symbol>`` in the ``.amdgpu.info``
+section (see :ref:`amdgpu-info-section`).  Only valid when the OS is ``amdhsa``.
+The block is terminated by an ``.end_amdgpu_info`` directive.
+
+The following sub-directives may appear inside the block:
+
+  .. table:: .amdgpu_info Sub-Directives
+     :name: amdgpu-info-sub-directives-table
+
+     ====================================== ==========================================
+     Directive                              Description
+     ====================================== ==========================================
+     ``.amdgpu_flags`` *value*              ``FuncInfoFlags`` bitfield (u32)
+     ``.amdgpu_num_vgpr`` *value*           Architectural VGPRs used (u32)
+     ``.amdgpu_num_agpr`` *value*           Accumulator VGPRs used (u32)
+     ``.amdgpu_num_sgpr`` *value*           SGPRs explicitly used (u32)
+     ``.amdgpu_private_segment_size`` *n*   Private segment size in bytes (u32)
+     ``.amdgpu_occupancy`` *n*              Target occupancy in waves per EU (u32)
+     ``.amdgpu_use`` *symbol*               Resource dependency (LDS or barrier)
+     ``.amdgpu_call`` *symbol*              Direct call edge to *symbol*
+     ``.amdgpu_indirect_call`` *"type-id"*  Indirect call with given type-ID string
+     ``.amdgpu_typeid`` *"type-id"*         Type-ID for an address-taken function
+     ====================================== ==========================================
+
+Example:
+
+.. code-block:: nasm
+
+   .amdgpu_info my_kernel
+     .amdgpu_flags 7
+     .amdgpu_num_vgpr 32
+     .amdgpu_num_agpr 0
+     .amdgpu_num_sgpr 33
+     .amdgpu_private_segment_size 0
+     .amdgpu_occupancy 65536
+     .amdgpu_call helper
+     .amdgpu_use lds_var
+     .amdgpu_indirect_call "vi"
+   .end_amdgpu_info
 
 .. _amdgpu-amdhsa-assembler-example-v3-onwards:
 

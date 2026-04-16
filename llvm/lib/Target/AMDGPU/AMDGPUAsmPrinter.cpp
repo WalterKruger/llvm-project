@@ -32,6 +32,7 @@
 #include "Utils/AMDGPUBaseInfo.h"
 #include "Utils/AMDKernelCodeTUtils.h"
 #include "Utils/SIDefinesUtils.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/CodeGen/AsmPrinterHandler.h"
@@ -537,6 +538,149 @@ void AMDGPUAsmPrinter::validateMCResourceInfo(Function &F) {
   }
 }
 
+static void appendTypeEncoding(std::string &Enc, Type *Ty,
+                               const DataLayout &DL) {
+  if (Ty->isVoidTy()) {
+    Enc += 'v';
+    return;
+  }
+  unsigned Bits = DL.getTypeSizeInBits(Ty);
+  if (Bits <= 32)
+    Enc += 'i';
+  else if (Bits <= 64)
+    Enc += 'l';
+  else
+    Enc.append(divideCeil(Bits, 32), 'i');
+}
+
+static std::string computeTypeId(const FunctionType *FTy,
+                                 const DataLayout &DL) {
+  std::string Enc;
+  appendTypeEncoding(Enc, FTy->getReturnType(), DL);
+  for (Type *ParamTy : FTy->params())
+    appendTypeEncoding(Enc, ParamTy, DL);
+  return Enc;
+}
+
+void AMDGPUAsmPrinter::collectCallEdge(const MachineInstr &MI) {
+  if (!AMDGPUTargetMachine::EnableObjectLinking)
+    return;
+  const GCNSubtarget &STI = MF->getSubtarget<GCNSubtarget>();
+  const SIInstrInfo *TII = STI.getInstrInfo();
+  const MachineOperand *CalleeOp =
+      TII->getNamedOperand(MI, AMDGPU::OpName::callee);
+  if (!CalleeOp || !CalleeOp->isGlobal())
+    return;
+  DirectCallEdges.insert(
+      {getSymbol(&MF->getFunction()), getSymbol(CalleeOp->getGlobal())});
+}
+
+void AMDGPUAsmPrinter::emitAMDGPUInfo(Module &M) {
+  if (!AMDGPUTargetMachine::EnableObjectLinking)
+    return;
+
+  const NamedMDNode *LDSMD = M.getNamedMetadata("amdgpu.lds.uses");
+  bool HasLdsUses = LDSMD && LDSMD->getNumOperands() > 0;
+
+  const NamedMDNode *BarMD = M.getNamedMetadata("amdgpu.named_barrier.uses");
+  bool HasNamedBarriers = BarMD && BarMD->getNumOperands() > 0;
+
+  // Collect address-taken functions (with type IDs) and indirect call sites.
+  DenseMap<const Function *, std::string> AddrTakenTypeIds;
+  using IndirectCallInfo = std::pair<const Function *, std::string>;
+  SmallVector<IndirectCallInfo, 8> IndirectCalls;
+
+  for (const Function &F : M) {
+    bool IsKernel = AMDGPU::isKernel(F.getCallingConv());
+
+    if (!IsKernel && F.hasAddressTaken(/*PutOffender=*/nullptr,
+                                       /*IgnoreCallbackUses=*/false,
+                                       /*IgnoreAssumeLikeCalls=*/true,
+                                       /*IgnoreLLVMUsed=*/true)) {
+      AddrTakenTypeIds[&F] =
+          computeTypeId(F.getFunctionType(), M.getDataLayout());
+    }
+
+    if (F.isDeclaration())
+      continue;
+
+    StringSet<> SeenTypeIds;
+    for (const BasicBlock &BB : F) {
+      for (const Instruction &I : BB) {
+        const auto *CB = dyn_cast<CallBase>(&I);
+        if (!CB || !CB->isIndirectCall())
+          continue;
+        std::string TId =
+            computeTypeId(CB->getFunctionType(), M.getDataLayout());
+        if (SeenTypeIds.insert(TId).second)
+          IndirectCalls.push_back({&F, std::move(TId)});
+      }
+    }
+  }
+
+  if (FunctionResourceInfos.empty() && DirectCallEdges.empty() && !HasLdsUses &&
+      !HasNamedBarriers && AddrTakenTypeIds.empty() && IndirectCalls.empty())
+    return;
+
+  AMDGPU::InfoSectionData Data;
+
+  DenseSet<MCSymbol *> DefinedSyms;
+
+  for (const PerFunctionResourceInfo &PFRI : FunctionResourceInfos) {
+    MCSymbol *Sym = getSymbol(PFRI.F);
+    DefinedSyms.insert(Sym);
+
+    AMDGPU::FuncInfo FI;
+    FI.Sym = Sym;
+    FI.IsKernel = AMDGPU::isKernel(PFRI.F->getCallingConv());
+    FI.NumArchVGPR = PFRI.RI.NumVGPR;
+    FI.NumAccVGPR = PFRI.RI.NumAGPR;
+    FI.NumSGPR = PFRI.RI.NumExplicitSGPR;
+    FI.PrivateSegmentSize = static_cast<uint32_t>(PFRI.RI.PrivateSegmentSize);
+    FI.Occupancy = PFRI.Occupancy;
+    FI.UsesVCC = PFRI.RI.UsesVCC;
+    FI.UsesFlatScratch = PFRI.RI.UsesFlatScratch;
+    FI.HasDynStack = PFRI.RI.HasDynamicallySizedStack;
+
+    Data.Funcs.push_back(std::move(FI));
+  }
+
+  for (auto &[F, TypeId] : AddrTakenTypeIds) {
+    MCSymbol *Sym = getSymbol(F);
+    Data.TypeIds.push_back({Sym, TypeId});
+  }
+
+  for (auto &[CallerSym, CalleeSym] : DirectCallEdges)
+    Data.Calls.push_back({CallerSym, CalleeSym});
+  DirectCallEdges.clear();
+
+  if (HasLdsUses) {
+    for (const MDNode *N : LDSMD->operands()) {
+      auto *Func = mdconst::extract<Function>(N->getOperand(0));
+      auto *LdsVar = mdconst::extract<GlobalVariable>(N->getOperand(1));
+      Data.Uses.push_back({getSymbol(Func), getSymbol(LdsVar)});
+    }
+  }
+
+  if (HasNamedBarriers) {
+    for (const MDNode *N : BarMD->operands()) {
+      auto *BarVar = mdconst::extract<GlobalVariable>(N->getOperand(0));
+      MCSymbol *BarSym = getSymbol(BarVar);
+      for (unsigned I = 1, E = N->getNumOperands(); I < E; ++I) {
+        auto *Func = mdconst::extract<Function>(N->getOperand(I));
+        Data.Uses.push_back({getSymbol(Func), BarSym});
+      }
+    }
+  }
+
+  for (auto &[Caller, Enc] : IndirectCalls) {
+    MCSymbol *CallerSym = getSymbol(Caller);
+    Data.IndirectCalls.push_back({CallerSym, Enc});
+  }
+
+  getTargetStreamer()->emitAMDGPUInfo(Data);
+}
+
 bool AMDGPUAsmPrinter::doFinalization(Module &M) {
   // Pad with s_code_end to help tools and guard against instruction prefetch
   // causing stale data in caches. Arguably this should be done by the linker,
@@ -553,6 +697,10 @@ bool AMDGPUAsmPrinter::doFinalization(Module &M) {
     }
   }
 
+  // Emit the unified .amdgpu.info section (per-function resources, call graph,
+  // LDS/named-barrier use edges, indirect calls, and address-taken type IDs).
+  emitAMDGPUInfo(M);
+
   // Assign expressions which can only be resolved when all other functions are
   // known.
   RI.finalize(OutContext);
@@ -567,8 +715,10 @@ bool AMDGPUAsmPrinter::doFinalization(Module &M) {
       RI.getMaxSGPRSymbol(OutContext), RI.getMaxNamedBarrierSymbol(OutContext));
   OutStreamer->popSection();
 
-  for (Function &F : M.functions())
-    validateMCResourceInfo(F);
+  if (!AMDGPUTargetMachine::EnableObjectLinking) {
+    for (Function &F : M.functions())
+      validateMCResourceInfo(F);
+  }
 
   RI.reset();
 
@@ -728,6 +878,13 @@ bool AMDGPUAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
   }
 
   RI.gatherResourceInfo(MF, *ResourceUsage, OutContext);
+
+  if (AMDGPUTargetMachine::EnableObjectLinking) {
+    // FIXME: Need to set occupancy correctly.
+    PerFunctionResourceInfo PFRI = {&MF.getFunction(), *ResourceUsage,
+                                    /*Occupancy=*/10};
+    FunctionResourceInfos.push_back(PFRI);
+  }
 
   if (MFI->isModuleEntryFunction()) {
     getSIProgramInfo(CurrentProgramInfo, MF);

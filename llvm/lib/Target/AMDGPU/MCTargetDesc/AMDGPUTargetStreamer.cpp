@@ -664,6 +664,75 @@ void AMDGPUTargetAsmStreamer::EmitAmdhsaKernelDescriptor(
   OS << "\t.end_amdhsa_kernel\n";
 }
 
+void AMDGPUTargetAsmStreamer::emitAMDGPUInfo(
+    const AMDGPU::InfoSectionData &Data) {
+  // Group edges by source function symbol.
+  DenseMap<MCSymbol *, SmallVector<MCSymbol *, 2>> FuncUses;
+  DenseMap<MCSymbol *, SmallVector<MCSymbol *, 4>> FuncCalls;
+  DenseMap<MCSymbol *, SmallVector<StringRef, 2>> FuncIndirectCalls;
+  DenseMap<MCSymbol *, SmallVector<StringRef, 1>> FuncTypeIds;
+  for (const auto &[Func, Res] : Data.Uses)
+    FuncUses[Func].push_back(Res);
+  for (const auto &[Src, Dst] : Data.Calls)
+    FuncCalls[Src].push_back(Dst);
+  for (const auto &[Func, TypeId] : Data.IndirectCalls)
+    FuncIndirectCalls[Func].push_back(TypeId);
+  for (const auto &[Sym, TypeId] : Data.TypeIds)
+    FuncTypeIds[Sym].push_back(TypeId);
+
+  DenseSet<MCSymbol *> Emitted;
+  auto EmitScope = [&](MCSymbol *Sym, const AMDGPU::FuncInfo *Info) {
+    if (!Emitted.insert(Sym).second)
+      return;
+    OS << "\t.amdgpu_info " << Sym->getName() << '\n';
+    if (Info) {
+      AMDGPU::FuncInfoFlags Flags{};
+      if (Info->IsKernel)
+        Flags |= AMDGPU::FuncInfoFlags::FUNC_IS_KERNEL;
+      if (Info->UsesVCC)
+        Flags |= AMDGPU::FuncInfoFlags::FUNC_USES_VCC;
+      if (Info->UsesFlatScratch)
+        Flags |= AMDGPU::FuncInfoFlags::FUNC_USES_FLAT_SCRATCH;
+      if (Info->HasDynStack)
+        Flags |= AMDGPU::FuncInfoFlags::FUNC_HAS_DYN_STACK;
+      OS << "\t\t.amdgpu_flags " << llvm::to_underlying(Flags) << '\n';
+      OS << "\t\t.amdgpu_num_vgpr " << Info->NumArchVGPR << '\n';
+      if (Info->NumAccVGPR)
+        OS << "\t\t.amdgpu_num_agpr " << Info->NumAccVGPR << '\n';
+      OS << "\t\t.amdgpu_num_sgpr " << Info->NumSGPR << '\n';
+      OS << "\t\t.amdgpu_private_segment_size " << Info->PrivateSegmentSize
+         << '\n';
+      OS << "\t\t.amdgpu_occupancy " << Info->Occupancy << '\n';
+    }
+    if (auto It = FuncUses.find(Sym); It != FuncUses.end())
+      for (MCSymbol *Res : It->second)
+        OS << "\t\t.amdgpu_use " << Res->getName() << '\n';
+    if (auto It = FuncCalls.find(Sym); It != FuncCalls.end())
+      for (MCSymbol *Dst : It->second)
+        OS << "\t\t.amdgpu_call " << Dst->getName() << '\n';
+    if (auto It = FuncIndirectCalls.find(Sym); It != FuncIndirectCalls.end())
+      for (StringRef TypeId : It->second)
+        OS << "\t\t.amdgpu_indirect_call \"" << TypeId << "\"\n";
+    if (auto It = FuncTypeIds.find(Sym); It != FuncTypeIds.end())
+      for (StringRef TypeId : It->second)
+        OS << "\t\t.amdgpu_typeid \"" << TypeId << "\"\n";
+    OS << "\t.end_amdgpu_info\n\n";
+  };
+
+  for (const FuncInfo &Func : Data.Funcs)
+    EmitScope(Func.Sym, &Func);
+
+  // Emit scopes for functions that only appear in edges (e.g. typeid-only).
+  for (const auto &[Sym, TypeId] : Data.TypeIds)
+    EmitScope(Sym, nullptr);
+  for (const auto &[Sym, Res] : Data.Uses)
+    EmitScope(Sym, nullptr);
+  for (const auto &[Sym, Dst] : Data.Calls)
+    EmitScope(Sym, nullptr);
+  for (const auto &[Sym, TypeId] : Data.IndirectCalls)
+    EmitScope(Sym, nullptr);
+}
+
 //===----------------------------------------------------------------------===//
 // AMDGPUTargetELFStreamer
 //===----------------------------------------------------------------------===//
@@ -1064,4 +1133,134 @@ void AMDGPUTargetELFStreamer::EmitAmdhsaKernelDescriptor(
                      sizeof(amdhsa::kernel_descriptor_t::kernarg_preload));
   for (uint32_t i = 0; i < sizeof(amdhsa::kernel_descriptor_t::reserved3); ++i)
     Streamer.emitInt8(0u);
+}
+
+void AMDGPUTargetELFStreamer::emitAMDGPUInfo(
+    const AMDGPU::InfoSectionData &Data) {
+  MCELFStreamer &S = getStreamer();
+  MCContext &Context = S.getContext();
+
+  StringMap<uint32_t> StrPoolOffsets;
+  SmallString<128> StrPool;
+  auto getOrAddString = [&](StringRef Str) -> uint32_t {
+    if (Str.empty())
+      return UINT32_MAX;
+    auto [It, Inserted] = StrPoolOffsets.try_emplace(Str, 0);
+    if (Inserted) {
+      It->second = StrPool.size();
+      StrPool.append(Str);
+      StrPool.push_back('\0');
+    }
+    return It->second;
+  };
+
+  // Pre-resolve string table offsets.
+  SmallVector<uint32_t, 4> ICallTypeIdOffsets;
+  for (const auto &[Func, TypeId] : Data.IndirectCalls)
+    ICallTypeIdOffsets.push_back(getOrAddString(TypeId));
+  SmallVector<uint32_t, 4> TypeIdOffsets;
+  for (const auto &[Sym, TypeId] : Data.TypeIds)
+    TypeIdOffsets.push_back(getOrAddString(TypeId));
+
+  // Group edges by source function symbol.
+  DenseMap<MCSymbol *, SmallVector<MCSymbol *, 2>> FuncUses;
+  DenseMap<MCSymbol *, SmallVector<MCSymbol *, 4>> FuncCalls;
+  DenseMap<MCSymbol *, SmallVector<uint32_t, 2>> FuncIndirectCalls;
+  DenseMap<MCSymbol *, SmallVector<uint32_t, 1>> FuncTypeIds;
+  for (const auto &[Func, Res] : Data.Uses)
+    FuncUses[Func].push_back(Res);
+  for (const auto &[Src, Dst] : Data.Calls)
+    FuncCalls[Src].push_back(Dst);
+  for (uint32_t I = 0, E = Data.IndirectCalls.size(); I < E; ++I) {
+    FuncIndirectCalls[Data.IndirectCalls[I].first].push_back(
+        ICallTypeIdOffsets[I]);
+  }
+  for (uint32_t I = 0, E = Data.TypeIds.size(); I < E; ++I)
+    FuncTypeIds[Data.TypeIds[I].first].push_back(TypeIdOffsets[I]);
+
+  // Helpers to emit kind+len tagged entries.
+  auto EmitU32Entry = [&](AMDGPU::InfoKind Kind, uint32_t Val) {
+    S.emitInt8(static_cast<uint8_t>(Kind));
+    S.emitInt8(4);
+    S.emitInt32(Val);
+  };
+  auto EmitSymEntry = [&](AMDGPU::InfoKind Kind, MCSymbol *Sym) {
+    S.emitInt8(static_cast<uint8_t>(Kind));
+    S.emitInt8(8);
+    S.emitValue(MCSymbolRefExpr::create(Sym, Context), 8);
+  };
+
+  S.pushSection();
+  MCSectionELF *InfoSec = Context.getELFSection(
+      ".amdgpu.info", ELF::SHT_PROGBITS, ELF::SHF_EXCLUDE);
+  S.switchSection(InfoSec);
+
+  DenseSet<MCSymbol *> Emitted;
+  auto EmitScope = [&](MCSymbol *Sym, const AMDGPU::FuncInfo *Info) {
+    if (!Emitted.insert(Sym).second)
+      return;
+
+    EmitSymEntry(AMDGPU::InfoKind::INFO_FUNC, Sym);
+
+    if (Info) {
+      AMDGPU::FuncInfoFlags Flags{};
+      if (Info->IsKernel)
+        Flags |= AMDGPU::FuncInfoFlags::FUNC_IS_KERNEL;
+      if (Info->UsesVCC)
+        Flags |= AMDGPU::FuncInfoFlags::FUNC_USES_VCC;
+      if (Info->UsesFlatScratch)
+        Flags |= AMDGPU::FuncInfoFlags::FUNC_USES_FLAT_SCRATCH;
+      if (Info->HasDynStack)
+        Flags |= AMDGPU::FuncInfoFlags::FUNC_HAS_DYN_STACK;
+      EmitU32Entry(AMDGPU::InfoKind::INFO_FLAGS, llvm::to_underlying(Flags));
+      EmitU32Entry(AMDGPU::InfoKind::INFO_NUM_VGPR, Info->NumArchVGPR);
+      EmitU32Entry(AMDGPU::InfoKind::INFO_PRIVATE_SEGMENT_SIZE,
+                   Info->PrivateSegmentSize);
+      EmitU32Entry(AMDGPU::InfoKind::INFO_OCCUPANCY, Info->Occupancy);
+      // The following entries are only emitted if the function actually uses
+      // them because they are not always present on all architectures.
+      if (Info->NumAccVGPR)
+        EmitU32Entry(AMDGPU::InfoKind::INFO_NUM_AGPR, Info->NumAccVGPR);
+      EmitU32Entry(AMDGPU::InfoKind::INFO_NUM_SGPR, Info->NumSGPR);
+    }
+
+    if (auto It = FuncUses.find(Sym); It != FuncUses.end()) {
+      for (MCSymbol *Res : It->second)
+        EmitSymEntry(AMDGPU::InfoKind::INFO_USE, Res);
+    }
+    if (auto It = FuncCalls.find(Sym); It != FuncCalls.end()) {
+      for (MCSymbol *Dst : It->second)
+        EmitSymEntry(AMDGPU::InfoKind::INFO_CALL, Dst);
+    }
+    if (auto It = FuncIndirectCalls.find(Sym); It != FuncIndirectCalls.end()) {
+      for (uint32_t Off : It->second)
+        EmitU32Entry(AMDGPU::InfoKind::INFO_INDIRECT_CALL, Off);
+    }
+    if (auto It = FuncTypeIds.find(Sym); It != FuncTypeIds.end()) {
+      for (uint32_t Off : It->second)
+        EmitU32Entry(AMDGPU::InfoKind::INFO_TYPEID, Off);
+    }
+  };
+
+  for (const auto &Func : Data.Funcs)
+    EmitScope(Func.Sym, &Func);
+
+  // Emit scopes for functions that only appear in edges.
+  for (const auto &[Sym, TypeId] : Data.TypeIds)
+    EmitScope(Sym, /*Info=*/nullptr);
+  for (const auto &[Sym, Res] : Data.Uses)
+    EmitScope(Sym, /*Info=*/nullptr);
+  for (const auto &[Sym, Dst] : Data.Calls)
+    EmitScope(Sym, /*Info=*/nullptr);
+  for (const auto &[Sym, TypeId] : Data.IndirectCalls)
+    EmitScope(Sym, /*Info=*/nullptr);
+
+  if (!StrPool.empty()) {
+    MCSectionELF *Sec = Context.getELFSection(".amdgpu.strtab", ELF::SHT_STRTAB,
+                                              ELF::SHF_EXCLUDE);
+    S.switchSection(Sec);
+    S.emitBytes(StrPool);
+  }
+
+  S.popSection();
 }
