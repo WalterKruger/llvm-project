@@ -17614,7 +17614,7 @@ InstructionCost BoUpSLP::getSpillCost() {
         // call-free region, regardless of whether bit is 0 or 1.
         return true;
       Last = Checked;
-    } else if (Last->comesBefore(First)) {
+    } else if (Last == First || Last->comesBefore(First)) {
       // Empty range.
       return true;
     }
@@ -17685,8 +17685,6 @@ InstructionCost BoUpSLP::getSpillCost() {
     else
       Worklist.append(pred_begin(Root), pred_end(Root));
     SmallPtrSet<const BasicBlock *, 16> Visited;
-    SmallDenseSet<std::pair<const BasicBlock *, const BasicBlock *>>
-        ParentsPairsToAdd;
     // With "at least one call-free path" semantics we can only reliably
     // memoize the exact (Root, OpParent) query. Pairs for intermediate
     // blocks that were visited during the BFS are not necessarily
