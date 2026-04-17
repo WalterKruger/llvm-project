@@ -10,7 +10,7 @@ declare void @external_call()
 ; YAML-NEXT: Function:        test_spillcost_backedge
 ; YAML-NEXT: Args:
 ; YAML-NEXT:   - String:          'Stores SLP vectorized with cost '
-; YAML-NEXT:   - Cost:            '-99'
+; YAML-NEXT:   - Cost:            '-101'
 ; YAML-NEXT:   - String:          ' and with tree size '
 ; YAML-NEXT:   - TreeSize:        '6'
 ; YAML-NEXT: ...
