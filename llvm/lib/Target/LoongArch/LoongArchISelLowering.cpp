@@ -2713,6 +2713,7 @@ lowerVECTOR_SHUFFLE_XVEXTRINS(const SDLoc &DL, ArrayRef<int> Mask, MVT VT,
                               SDValue V1, SDValue V2, SelectionDAG &DAG,
                               const LoongArchSubtarget &Subtarget) {
   int NumElts = VT.getVectorNumElements();
+  int HalfSize = NumElts / 2;
   MVT EltVT = VT.getVectorElementType();
   MVT GRLenVT = Subtarget.getGRLenVT();
 
@@ -2732,46 +2733,39 @@ lowerVECTOR_SHUFFLE_XVEXTRINS(const SDLoc &DL, ArrayRef<int> Mask, MVT VT,
     }
 
     // Need exactly two differing element to lower into XVEXTRINS.
-    if (DiffPos.size() != 2 || DiffPos[1] != DiffPos[0] + NumElts / 2)
+    if (DiffPos.size() != 2 || DiffPos[1] != DiffPos[0] + HalfSize)
       return SDValue();
 
     // DiffMask must be in its low or high part.
     int DiffMaskLo = Mask[DiffPos[0]];
     int DiffMaskHi = Mask[DiffPos[1]];
-    if (!(DiffMaskLo >= 0 && DiffMaskLo < NumElts / 2) &&
-        !(DiffMaskLo >= NumElts && DiffMaskLo < NumElts + NumElts / 2))
+    if (!(DiffMaskLo >= 0 && DiffMaskLo < HalfSize) &&
+        !(DiffMaskLo >= NumElts && DiffMaskLo < NumElts + HalfSize))
       return SDValue();
-    if (!(DiffMaskHi >= NumElts / 2 && DiffMaskHi < NumElts) &&
-        !(DiffMaskHi >= NumElts + NumElts / 2 && DiffMaskHi < 2 * NumElts))
+    if (!(DiffMaskHi >= HalfSize && DiffMaskHi < NumElts) &&
+        !(DiffMaskHi >= NumElts + HalfSize && DiffMaskHi < 2 * NumElts))
       return SDValue();
-    if (DiffMaskHi != DiffMaskLo + NumElts / 2)
+    if (DiffMaskHi != DiffMaskLo + HalfSize)
       return SDValue();
 
     // Determine source vector and source index.
-    SDValue SrcVec = (DiffMaskLo < NumElts / 2) ? V1 : V2;
+    SDValue SrcVec = (DiffMaskLo < HalfSize) ? V1 : V2;
     int SrcIdxLo =
-        (DiffMaskLo < NumElts / 2) ? DiffMaskLo : (DiffMaskLo - NumElts);
+        (DiffMaskLo < HalfSize) ? DiffMaskLo : (DiffMaskLo - NumElts);
     bool IsEltFP = EltVT.isFloatingPoint();
-
-    auto extractVal = [&](int Idx) -> SDValue {
-      SDValue Extracted =
-          DAG.getNode(ISD::EXTRACT_VECTOR_ELT, DL, IsEltFP ? EltVT : GRLenVT,
-                      SrcVec, DAG.getConstant(Idx, DL, GRLenVT));
-      SDValue InsertVal = Extracted;
-      if (!IsEltFP && EltVT != GRLenVT)
-        InsertVal =
-            DAG.getNode(ISD::ANY_EXTEND, DL, GRLenVT,
-                        DAG.getNode(ISD::TRUNCATE, DL, EltVT, Extracted));
-      return InsertVal;
-    };
 
     // Replace with 2*EXTRACT_VECTOR_ELT + 2*INSERT_VECTOR_ELT, it will match
     // the patterns of XVEXTRINS in tablegen.
-    SDValue InsertLo = DAG.getNode(ISD::INSERT_VECTOR_ELT, DL, VT,
-                                   (Base == 0) ? V1 : V2, extractVal(SrcIdxLo),
-                                   DAG.getConstant(DiffPos[0], DL, GRLenVT));
-    SDValue Result = DAG.getNode(ISD::INSERT_VECTOR_ELT, DL, VT, InsertLo,
-                                 extractVal(SrcIdxLo + NumElts / 2),
+    SDValue BaseVec = (Base == 0) ? V1 : V2;
+    SDValue EltLo =
+        DAG.getNode(ISD::EXTRACT_VECTOR_ELT, DL, IsEltFP ? EltVT : GRLenVT,
+                    SrcVec, DAG.getConstant(SrcIdxLo, DL, GRLenVT));
+    SDValue InsLo = DAG.getNode(ISD::INSERT_VECTOR_ELT, DL, VT, BaseVec, EltLo,
+                                DAG.getConstant(DiffPos[0], DL, GRLenVT));
+    SDValue EltHi =
+        DAG.getNode(ISD::EXTRACT_VECTOR_ELT, DL, IsEltFP ? EltVT : GRLenVT,
+                    SrcVec, DAG.getConstant(SrcIdxLo + HalfSize, DL, GRLenVT));
+    SDValue Result = DAG.getNode(ISD::INSERT_VECTOR_ELT, DL, VT, InsLo, EltHi,
                                  DAG.getConstant(DiffPos[1], DL, GRLenVT));
 
     return Result;
