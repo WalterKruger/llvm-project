@@ -35,6 +35,7 @@
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constant.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/DIBuilder.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
@@ -122,6 +123,11 @@ static cl::opt<std::string> ClWriteSummary(
     "lowertypetests-write-summary",
     cl::desc("Write summary to given YAML file after running pass"),
     cl::Hidden);
+
+static cl::opt<bool>
+    ClAnnotateDebugInfo("lowertypetests-annotate-debug-info",
+                        cl::desc("Create debug info for generate function"),
+                        cl::Hidden);
 
 bool BitSetInfo::containsGlobalOffset(uint64_t Offset) const {
   if (Offset < ByteOffset)
@@ -1523,11 +1529,46 @@ Triple::ArchType LowerTypeTestsModule::selectJumpTableArmEncoding(
   return ArmCount > ThumbCount ? Triple::arm : Triple::thumb;
 }
 
+static llvm::DILocation *createDebugInfo(Function *F) {
+  Module &M = *F->getParent();
+  DICompileUnit *CU = nullptr;
+  auto CUs = M.debug_compile_units();
+  if (!CUs.empty())
+    CU = *CUs.begin();
+
+  DIBuilder DIB(M, /*AllowUnresolved=*/true, CU);
+  llvm::DIFile *File = DIB.createFile("ubsan_interface.h", "sanitizer");
+  if (!CU) {
+    CU = DIB.createCompileUnit(
+        DISourceLanguageName(dwarf::DW_LANG_C), File, "llvm", true, "", 0, "",
+        DICompileUnit::DebugEmissionKind::LineTablesOnly);
+  }
+
+  DISubroutineType *DIFnTy = DIB.createSubroutineType(nullptr);
+
+  llvm::DISubprogram *NormalSP = DIB.createFunction(
+      File, F->getName(), StringRef(), File, 0, DIFnTy, 0,
+      DINode::FlagArtificial, DISubprogram::SPFlagDefinition);
+  F->setSubprogram(NormalSP);
+
+  llvm::DISubprogram *InlineSP = DIB.createFunction(
+      File, "__ubsan_check_cfi_icall_jt", StringRef(), File, 0, DIFnTy, 0,
+      DINode::FlagArtificial, DISubprogram::SPFlagDefinition);
+
+  DIB.finalize();
+
+  return llvm::DILocation::get(
+      M.getContext(), 0, 0, InlineSP,
+      llvm::DILocation::get(M.getContext(), 0, 0, NormalSP));
+}
+
 void LowerTypeTestsModule::createJumpTable(
     Function *F, ArrayRef<GlobalTypeMember *> Functions,
     Triple::ArchType JumpTableArch) {
   BasicBlock *BB = BasicBlock::Create(M.getContext(), "entry", F);
   IRBuilder<> IRB(BB);
+  if (ClAnnotateDebugInfo)
+    IRB.SetCurrentDebugLocation(createDebugInfo(F));
 
   InlineAsm *JumpTableAsm = createJumpTableEntryAsm(JumpTableArch);
 
