@@ -2733,12 +2733,24 @@ lowerVECTOR_SHUFFLE_XVEXTRINS(const SDLoc &DL, ArrayRef<int> Mask, MVT VT,
     }
 
     // Need exactly two differing element to lower into XVEXTRINS.
+    // If only one differing element, the element at a distance of
+    // HalfSize from it must be undef.
+    if (DiffPos.size() == 1) {
+      if (DiffPos[0] < HalfSize && Mask[DiffPos[0] + HalfSize] == -1)
+        DiffPos.push_back(DiffPos[0] + HalfSize);
+      else if (DiffPos[0] >= HalfSize && Mask[DiffPos[0] - HalfSize] == -1)
+        DiffPos.insert(DiffPos.begin(), DiffPos[0] - HalfSize);
+      else
+        return SDValue();
+    }
     if (DiffPos.size() != 2 || DiffPos[1] != DiffPos[0] + HalfSize)
       return SDValue();
 
     // DiffMask must be in its low or high part.
     int DiffMaskLo = Mask[DiffPos[0]];
     int DiffMaskHi = Mask[DiffPos[1]];
+    DiffMaskLo = DiffMaskLo == -1 ? DiffMaskHi - HalfSize : DiffMaskLo;
+    DiffMaskHi = DiffMaskHi == -1 ? DiffMaskLo + HalfSize : DiffMaskHi;
     if (!(DiffMaskLo >= 0 && DiffMaskLo < HalfSize) &&
         !(DiffMaskLo >= NumElts && DiffMaskLo < NumElts + HalfSize))
       return SDValue();
