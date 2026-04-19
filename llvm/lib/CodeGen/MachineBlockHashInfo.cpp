@@ -43,7 +43,7 @@ static uint64_t hashValue(const APInt &I) {
   return hashValue(ArrayRef(I.getRawData(), I.getNumWords()));
 }
 
-template <typename T> static uint64_t ignoreValue(const T *I) { return 1; }
+template <typename T> static uint64_t ignoreValue(const T *) { return 1; }
 
 static uint64_t hashCombine() { return 0; }
 
