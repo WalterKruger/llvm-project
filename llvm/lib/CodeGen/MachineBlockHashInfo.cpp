@@ -25,8 +25,6 @@ hashValue(const T &Val) {
   return static_cast<uint64_t>(Val);
 }
 
-static uint64_t hashValue(const void *P) { return 1; }
-
 static uint64_t hashValue(StringRef S) {
   uint64_t Hash = 0;
   for (char C : S)
@@ -41,6 +39,12 @@ template <typename T> uint64_t hashValue(ArrayRef<T> A) {
   return Hash;
 }
 
+static uint64_t hashValue(const APInt &I) {
+  return hashValue(ArrayRef(I.getRawData(), I.getNumWords()));
+}
+
+template <typename T> static uint64_t ignoreValue(const T *I) { return 1; }
+
 static uint64_t hashCombine() { return 0; }
 
 template <typename T, typename... Ts>
@@ -48,7 +52,8 @@ uint64_t hashCombine(const T &Hash, const Ts &...Args) {
   return hashing::detail::hash_16_bytes(hashValue(Hash), hashCombine(Args...));
 }
 
-static uint64_t hashOpearand(const MachineOperand &MO) {
+// Similar to hash_code llvm::hash_value(const MachineOperand &MO) but stable.
+static uint64_t hashOperand(const MachineOperand &MO) {
   switch (MO.getType()) {
   case MachineOperand::MO_Register:
     // Register operands don't have target flags.
@@ -57,11 +62,14 @@ static uint64_t hashOpearand(const MachineOperand &MO) {
   case MachineOperand::MO_Immediate:
     return hashCombine(MO.getType(), MO.getTargetFlags(), MO.getImm());
   case MachineOperand::MO_CImmediate:
-    return hashCombine(MO.getType(), MO.getTargetFlags(), MO.getCImm());
+    return hashCombine(MO.getType(), MO.getTargetFlags(),
+                       MO.getCImm()->getValue());
   case MachineOperand::MO_FPImmediate:
-    return hashCombine(MO.getType(), MO.getTargetFlags(), MO.getFPImm());
+    return hashCombine(MO.getType(), MO.getTargetFlags(),
+                       MO.getFPImm()->getValue().bitcastToAPInt());
   case MachineOperand::MO_MachineBasicBlock:
-    return hashCombine(MO.getType(), MO.getTargetFlags(), MO.getMBB());
+    return hashCombine(MO.getType(), MO.getTargetFlags(),
+                       ignoreValue(MO.getMBB()));
   case MachineOperand::MO_FrameIndex:
     return hashCombine(MO.getType(), MO.getTargetFlags(), MO.getIndex());
   case MachineOperand::MO_ConstantPoolIndex:
@@ -74,19 +82,21 @@ static uint64_t hashOpearand(const MachineOperand &MO) {
     return hashCombine(MO.getType(), MO.getTargetFlags(), MO.getOffset(),
                        StringRef(MO.getSymbolName()));
   case MachineOperand::MO_GlobalAddress:
-    return hashCombine(MO.getType(), MO.getTargetFlags(), MO.getGlobal(),
-                       MO.getOffset());
+    return hashCombine(MO.getType(), MO.getTargetFlags(),
+                       ignoreValue(MO.getGlobal()), MO.getOffset());
   case MachineOperand::MO_BlockAddress:
-    return hashCombine(MO.getType(), MO.getTargetFlags(), MO.getBlockAddress(),
-                       MO.getOffset());
+    return hashCombine(MO.getType(), MO.getTargetFlags(),
+                       ignoreValue(MO.getBlockAddress()), MO.getOffset());
   case MachineOperand::MO_RegisterMask:
-  case MachineOperand::MO_RegisterLiveOut: {
-    return hashCombine(MO.getType(), MO.getTargetFlags());
-  }
+  case MachineOperand::MO_RegisterLiveOut:
+    return hashCombine(MO.getType(), MO.getTargetFlags(),
+                       ignoreValue(MO.getRegMask()));
   case MachineOperand::MO_Metadata:
-    return hashCombine(MO.getType(), MO.getTargetFlags(), MO.getMetadata());
+    return hashCombine(MO.getType(), MO.getTargetFlags(),
+                       ignoreValue(MO.getMetadata()));
   case MachineOperand::MO_MCSymbol:
-    return hashCombine(MO.getType(), MO.getTargetFlags(), MO.getMCSymbol());
+    return hashCombine(MO.getType(), MO.getTargetFlags(),
+                       ignoreValue(MO.getMCSymbol()));
   case MachineOperand::MO_DbgInstrRef:
     return hashCombine(MO.getType(), MO.getTargetFlags(),
                        MO.getInstrRefInstrIndex(), MO.getInstrRefOpIndex());
@@ -113,8 +123,8 @@ static uint64_t hashBlock(const MachineBasicBlock &MBB, bool HashOperands) {
     Hash = hashing::detail::hash_16_bytes(Hash, MI.getOpcode());
     if (HashOperands) {
       for (unsigned i = 0; i < MI.getNumOperands(); i++) {
-        Hash = hashing::detail::hash_16_bytes(Hash,
-                                              hashOpearand(MI.getOperand(i)));
+        Hash =
+            hashing::detail::hash_16_bytes(Hash, hashOperand(MI.getOperand(i)));
       }
     }
   }
