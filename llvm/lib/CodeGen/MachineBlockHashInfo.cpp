@@ -14,6 +14,7 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/CodeGen/Passes.h"
+#include "llvm/IR/Constants.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Target/TargetMachine.h"
 
