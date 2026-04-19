@@ -11,13 +11,101 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/CodeGen/MachineBlockHashInfo.h"
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Target/TargetMachine.h"
 
 using namespace llvm;
 
-uint64_t hashBlock(const MachineBasicBlock &MBB, bool HashOperands) {
+template <typename T>
+std::enable_if_t<is_integral_or_enum<T>::value, uint64_t>
+hashValue(const T &Val) {
+  return static_cast<uint64_t>(Val);
+}
+
+static uint64_t hashValue(const void *P) { return 1; }
+
+static uint64_t hashValue(StringRef S) {
+  uint64_t Hash = 0;
+  for (char C : S)
+    Hash = hashing::detail::hash_16_bytes(Hash, C);
+  return Hash;
+}
+
+template <typename T> uint64_t hashValue(ArrayRef<T> A) {
+  uint64_t Hash = 0;
+  for (const auto &C : A)
+    Hash = hashing::detail::hash_16_bytes(Hash, C);
+  return Hash;
+}
+
+static uint64_t hashCombine() { return 0; }
+
+template <typename T, typename... Ts>
+uint64_t hashCombine(const T &Hash, const Ts &...Args) {
+  return hashing::detail::hash_16_bytes(hashValue(Hash), hashCombine(Args...));
+}
+
+static uint64_t hashOpearand(const MachineOperand &MO) {
+  switch (MO.getType()) {
+  case MachineOperand::MO_Register:
+    // Register operands don't have target flags.
+    return hashCombine(MO.getType(), MO.getReg().id(), MO.getSubReg(),
+                       MO.isDef());
+  case MachineOperand::MO_Immediate:
+    return hashCombine(MO.getType(), MO.getTargetFlags(), MO.getImm());
+  case MachineOperand::MO_CImmediate:
+    return hashCombine(MO.getType(), MO.getTargetFlags(), MO.getCImm());
+  case MachineOperand::MO_FPImmediate:
+    return hashCombine(MO.getType(), MO.getTargetFlags(), MO.getFPImm());
+  case MachineOperand::MO_MachineBasicBlock:
+    return hashCombine(MO.getType(), MO.getTargetFlags(), MO.getMBB());
+  case MachineOperand::MO_FrameIndex:
+    return hashCombine(MO.getType(), MO.getTargetFlags(), MO.getIndex());
+  case MachineOperand::MO_ConstantPoolIndex:
+  case MachineOperand::MO_TargetIndex:
+    return hashCombine(MO.getType(), MO.getTargetFlags(), MO.getIndex(),
+                       MO.getOffset());
+  case MachineOperand::MO_JumpTableIndex:
+    return hashCombine(MO.getType(), MO.getTargetFlags(), MO.getIndex());
+  case MachineOperand::MO_ExternalSymbol:
+    return hashCombine(MO.getType(), MO.getTargetFlags(), MO.getOffset(),
+                       StringRef(MO.getSymbolName()));
+  case MachineOperand::MO_GlobalAddress:
+    return hashCombine(MO.getType(), MO.getTargetFlags(), MO.getGlobal(),
+                       MO.getOffset());
+  case MachineOperand::MO_BlockAddress:
+    return hashCombine(MO.getType(), MO.getTargetFlags(), MO.getBlockAddress(),
+                       MO.getOffset());
+  case MachineOperand::MO_RegisterMask:
+  case MachineOperand::MO_RegisterLiveOut: {
+    return hashCombine(MO.getType(), MO.getTargetFlags());
+  }
+  case MachineOperand::MO_Metadata:
+    return hashCombine(MO.getType(), MO.getTargetFlags(), MO.getMetadata());
+  case MachineOperand::MO_MCSymbol:
+    return hashCombine(MO.getType(), MO.getTargetFlags(), MO.getMCSymbol());
+  case MachineOperand::MO_DbgInstrRef:
+    return hashCombine(MO.getType(), MO.getTargetFlags(),
+                       MO.getInstrRefInstrIndex(), MO.getInstrRefOpIndex());
+  case MachineOperand::MO_CFIIndex:
+    return hashCombine(MO.getType(), MO.getTargetFlags(), MO.getCFIIndex());
+  case MachineOperand::MO_IntrinsicID:
+    return hashCombine(MO.getType(), MO.getTargetFlags(), MO.getIntrinsicID());
+  case MachineOperand::MO_Predicate:
+    return hashCombine(MO.getType(), MO.getTargetFlags(), MO.getPredicate());
+  case MachineOperand::MO_ShuffleMask:
+    return hashCombine(MO.getType(), MO.getTargetFlags(), MO.getShuffleMask());
+  case MachineOperand::MO_LaneMask:
+    return hashCombine(MO.getType(), MO.getTargetFlags(),
+                       MO.getLaneMask().getAsInteger());
+  }
+  llvm_unreachable("Invalid machine operand type");
+}
+
+static uint64_t hashBlock(const MachineBasicBlock &MBB, bool HashOperands) {
   uint64_t Hash = 0;
   for (const MachineInstr &MI : MBB) {
     if (MI.isMetaInstruction() || MI.isTerminator())
@@ -25,8 +113,8 @@ uint64_t hashBlock(const MachineBasicBlock &MBB, bool HashOperands) {
     Hash = hashing::detail::hash_16_bytes(Hash, MI.getOpcode());
     if (HashOperands) {
       for (unsigned i = 0; i < MI.getNumOperands(); i++) {
-        Hash =
-            hashing::detail::hash_16_bytes(Hash, hash_value(MI.getOperand(i)));
+        Hash = hashing::detail::hash_16_bytes(Hash,
+                                              hashOpearand(MI.getOperand(i)));
       }
     }
   }
@@ -34,7 +122,7 @@ uint64_t hashBlock(const MachineBasicBlock &MBB, bool HashOperands) {
 }
 
 /// Fold a 64-bit integer to a 16-bit one.
-uint16_t fold_64_to_16(const uint64_t Value) {
+static uint16_t fold_64_to_16(const uint64_t Value) {
   uint16_t Res = static_cast<uint16_t>(Value);
   Res ^= static_cast<uint16_t>(Value >> 16);
   Res ^= static_cast<uint16_t>(Value >> 32);
@@ -66,18 +154,19 @@ bool MachineBlockHashInfo::runOnMachineFunction(MachineFunction &F) {
   uint16_t Offset = 0;
   // Initialize hash components
   for (const MachineBasicBlock &MBB : F) {
+    auto &HashInfo = HashInfos[&MBB];
     // offset of the machine basic block
-    HashInfos[&MBB].Offset = Offset;
-    Offset += MBB.size();
+    HashInfo.Offset = Offset + MBB.size();
     // Hashing opcodes
-    HashInfos[&MBB].OpcodeHash = hashBlock(MBB, /*HashOperands=*/false);
+    HashInfo.OpcodeHash = hashBlock(MBB, /*HashOperands=*/false);
     // Hash complete instructions
-    HashInfos[&MBB].InstrHash = hashBlock(MBB, /*HashOperands=*/true);
+    HashInfo.InstrHash = hashBlock(MBB, /*HashOperands=*/true);
   }
 
   // Initialize neighbor hash
   for (const MachineBasicBlock &MBB : F) {
-    uint64_t Hash = HashInfos[&MBB].OpcodeHash;
+    auto &HashInfo = HashInfos[&MBB];
+    uint64_t Hash = HashInfo.OpcodeHash;
     // Append hashes of successors
     for (const MachineBasicBlock *SuccMBB : MBB.successors()) {
       uint64_t SuccHash = HashInfos[SuccMBB].OpcodeHash;
@@ -88,7 +177,7 @@ bool MachineBlockHashInfo::runOnMachineFunction(MachineFunction &F) {
       uint64_t PredHash = HashInfos[PredMBB].OpcodeHash;
       Hash = hashing::detail::hash_16_bytes(Hash, PredHash);
     }
-    HashInfos[&MBB].NeighborHash = Hash;
+    HashInfo.NeighborHash = Hash;
   }
 
   // Assign hashes
